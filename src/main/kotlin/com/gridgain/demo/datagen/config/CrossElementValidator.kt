@@ -57,3 +57,62 @@ class ColumnUniquenessValidator : CrossElementValidator {
         return CrossElementValidationResult(errors = errors, warnings = emptyList())
     }
 }
+
+class RelationReferentialValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        val schemasByName = data.schemas.associateBy { it.name }
+        for (schema in data.schemas) {
+            for (column in schema.columns) {
+                val vs = column.valueSource
+                if (vs is ParentFkRefSpec) {
+                    val parent = schemasByName[vs.parentSchema]
+                    if (parent == null) {
+                        errors += "${schema.name}.${column.name}: parent schema '${vs.parentSchema}' " +
+                            "is not declared in data.yaml. Add the schema or correct the parent_schema reference."
+                    } else if (parent.columns.none { it.name == vs.parentColumn }) {
+                        errors += "${schema.name}.${column.name}: parent column " +
+                            "'${vs.parentSchema}.${vs.parentColumn}' is not declared on the parent schema. " +
+                            "Verify the parent_column reference."
+                    }
+                }
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}
+
+class NullRateOnRelationColumnValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        for (schema in data.schemas) {
+            for (column in schema.columns) {
+                if (column.valueSource is ParentFkRefSpec && column.nullRate > 0.0) {
+                    errors += "${schema.name}.${column.name}: null_rate is not valid on relation columns; " +
+                        "relation columns are populated from their parent and cannot be null."
+                }
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}
+
+class CohortBucketSharesValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        for (schema in data.schemas) {
+            for (column in schema.columns) {
+                val vs = column.valueSource
+                if (vs is ParentFkRefSpec) {
+                    val total = vs.cohortBuckets.sumOf { it.share }
+                    if (kotlin.math.abs(total - 1.0) > 0.001) {
+                        errors += "${schema.name}.${column.name}: cohort_buckets shares sum to " +
+                            "${"%.3f".format(total)} but must sum to 1.0 (within 0.001 tolerance). " +
+                            "Adjust the share values so they total 1.0."
+                    }
+                }
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}

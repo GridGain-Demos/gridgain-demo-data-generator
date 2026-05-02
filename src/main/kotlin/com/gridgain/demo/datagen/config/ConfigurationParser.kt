@@ -13,7 +13,13 @@ class ConfigurationParser(
     private val dataMigrationRunner: ConfigMigrationRunner = DataConfigMigrationRunner.create(),
     private val opsMigrationRunner: ConfigMigrationRunner = ConfigMigrationRunner(emptyList()),
     private val crossElementValidator: CrossElementValidator = CompositeCrossElementValidator(
-        listOf(DefaultCrossElementValidator(), ColumnUniquenessValidator())
+        listOf(
+            DefaultCrossElementValidator(),
+            ColumnUniquenessValidator(),
+            RelationReferentialValidator(),
+            NullRateOnRelationColumnValidator(),
+            CohortBucketSharesValidator(),
+        )
     ),
 ) {
 
