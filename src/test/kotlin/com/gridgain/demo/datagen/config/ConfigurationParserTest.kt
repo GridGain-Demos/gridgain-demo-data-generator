@@ -80,4 +80,14 @@ class ConfigurationParserTest {
             .hasMessageContaining("missing.yaml")
             .hasMessageContaining("does not exist")
     }
+
+    @Test
+    fun `missing ops file is rejected with remediation`(@TempDir dir: Path) {
+        val data = dir.resolve("data.yaml").also { it.writeText("schema_version: 1\n") }
+        val parser = ConfigurationParser(logger = logger)
+        assertThatThrownBy { parser.parse(dataFile = data.toFile(), opsFile = dir.resolve("missing-ops.yaml").toFile()) }
+            .isInstanceOf(MisconfigurationException::class.java)
+            .hasMessageContaining("missing-ops.yaml")
+            .hasMessageContaining("does not exist")
+    }
 }

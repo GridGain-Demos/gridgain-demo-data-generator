@@ -15,7 +15,7 @@ class ConfigMigrationTest {
 
     private val logger = Slf4jDataGenLogger(LoggerFactory.getLogger("test"))
 
-    private fun writeYaml(@TempDir dir: Path, name: String, body: String): Path {
+    private fun writeYaml(dir: Path, name: String, body: String): Path {
         val file = dir.resolve(name)
         file.writeText(body)
         return file
