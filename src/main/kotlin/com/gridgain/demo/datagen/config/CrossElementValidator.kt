@@ -34,3 +34,26 @@ class CompositeCrossElementValidator(
         return CrossElementValidationResult(errors, warnings)
     }
 }
+
+class ColumnUniquenessValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+
+        val seenSchemas = mutableSetOf<String>()
+        for (schema in data.schemas) {
+            if (!seenSchemas.add(schema.name)) {
+                errors += "duplicate schema name '${schema.name}' in data.yaml; " +
+                    "schema names must be unique."
+            }
+            val seenColumns = mutableSetOf<String>()
+            for (column in schema.columns) {
+                if (!seenColumns.add(column.name)) {
+                    errors += "duplicate column name '${column.name}' in schema '${schema.name}'; " +
+                        "column names must be unique within a schema."
+                }
+            }
+        }
+
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}

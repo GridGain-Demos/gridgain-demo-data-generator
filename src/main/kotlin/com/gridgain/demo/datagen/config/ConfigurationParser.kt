@@ -12,7 +12,9 @@ class ConfigurationParser(
     private val logger: DataGenLogger,
     private val dataMigrationRunner: ConfigMigrationRunner = DataConfigMigrationRunner.create(),
     private val opsMigrationRunner: ConfigMigrationRunner = ConfigMigrationRunner(emptyList()),
-    private val crossElementValidator: CrossElementValidator = DefaultCrossElementValidator(),
+    private val crossElementValidator: CrossElementValidator = CompositeCrossElementValidator(
+        listOf(DefaultCrossElementValidator(), ColumnUniquenessValidator())
+    ),
 ) {
 
     private val yamlMapper: YAMLMapper = YAMLMapper().registerKotlinModule() as YAMLMapper
