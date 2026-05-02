@@ -37,7 +37,15 @@ class ValueSourceFactory(
             key = spec.key,
             random = Random(seed),
         )
-        is ParentFkRefSpec -> throw NotImplementedError("ParentFkRefSpec value source is not yet implemented")
-        is KeySuffixSpec -> throw NotImplementedError("KeySuffixSpec value source is not yet implemented")
+        is ParentFkRefSpec -> ParentFkRefValueSource(
+            parentSchema = spec.parentSchema,
+            parentColumn = spec.parentColumn,
+        )
+        is KeySuffixSpec -> KeySuffixValueSource(
+            baseColumn = spec.baseColumn,
+            separator = spec.separator,
+            length = spec.length,
+            random = Random(seed + spec.baseColumn.hashCode()),
+        )
     }
 }

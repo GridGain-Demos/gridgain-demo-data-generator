@@ -1,7 +1,10 @@
 package com.gridgain.demo.datagen.generation
 
 import com.gridgain.demo.datagen.config.ColumnSpec
+import com.gridgain.demo.datagen.config.CohortBucket
 import com.gridgain.demo.datagen.config.DataFakerSpec
+import com.gridgain.demo.datagen.config.KeySuffixSpec
+import com.gridgain.demo.datagen.config.ParentFkRefSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.UniqueSpec
 import com.gridgain.demo.datagen.config.WeightedChoice
@@ -51,5 +54,16 @@ class ValueSourceFactoryTest {
             .isInstanceOf(WeightedChoiceValueSource::class.java)
         assertThat(factory.build(column(YamlDataSpec(path = "c.yaml", key = "xs"))))
             .isInstanceOf(YamlBackedValueSource::class.java)
+    }
+
+    @Test
+    fun `builds ParentFkRef and KeySuffix sources`(@TempDir dir: Path) {
+        val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
+        assertThat(
+            factory.build(column(ParentFkRefSpec("customer", "id", listOf(CohortBucket(1.0, 1)))))
+        ).isInstanceOf(ParentFkRefValueSource::class.java)
+        assertThat(
+            factory.build(column(KeySuffixSpec(baseColumn = "id", separator = "-", length = 4)))
+        ).isInstanceOf(KeySuffixValueSource::class.java)
     }
 }
