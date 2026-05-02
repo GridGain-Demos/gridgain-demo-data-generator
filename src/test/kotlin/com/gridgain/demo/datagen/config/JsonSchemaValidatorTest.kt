@@ -11,7 +11,7 @@ class JsonSchemaValidatorTest {
     @Test
     fun `valid v1 data yaml passes`() {
         val yaml = "schema_version: 1\n"
-        assertThatCode { JsonSchemaValidator.validateData(yaml, fileName = "data.yaml") }
+        assertThatCode { JsonSchemaValidator.validateData(yaml, fileName = "data.yaml", version = 1) }
             .doesNotThrowAnyException()
     }
 

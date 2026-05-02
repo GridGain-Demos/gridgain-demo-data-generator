@@ -25,12 +25,13 @@ class ConfigurationParserTest {
     }
 
     @Test
-    fun `parses minimal v1 data and ops yaml end-to-end`(@TempDir dir: Path) {
+    fun `auto-migrates a v1 data file forward to v2 end-to-end`(@TempDir dir: Path) {
         val data = copyResource(dir, "data-v1-minimal.yaml", "data.yaml")
         val ops = copyResource(dir, "ops-v1-minimal.yaml", "ops.yaml")
         val parser = ConfigurationParser(logger = logger)
         val parsed = parser.parse(dataFile = data.toFile(), opsFile = ops.toFile())
-        assertThat(parsed.data.schemaVersion).isEqualTo(1)
+        assertThat(parsed.data.schemaVersion).isEqualTo(2)
+        assertThat(parsed.data.schemas).isEmpty()
         assertThat(parsed.ops.schemaVersion).isEqualTo(1)
     }
 
@@ -68,7 +69,7 @@ class ConfigurationParserTest {
         }
         val parser = ConfigurationParser(logger = logger, crossElementValidator = warner)
         val parsed = parser.parse(dataFile = data.toFile(), opsFile = ops.toFile())
-        assertThat(parsed.data.schemaVersion).isEqualTo(1)
+        assertThat(parsed.data.schemaVersion).isEqualTo(2)
     }
 
     @Test
