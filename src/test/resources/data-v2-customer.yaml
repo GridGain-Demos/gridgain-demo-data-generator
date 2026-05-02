@@ -1,0 +1,35 @@
+schema_version: 2
+schemas:
+  - name: customer
+    update_ratio: 0.05
+    columns:
+      - name: id
+        null_rate: 0.0
+        value_source:
+          kind: sequence
+          start: 1
+          step: 1
+      - name: first_name
+        null_rate: 0.02
+        value_source:
+          kind: datafaker
+          expression: "#{name.firstName}"
+      - name: state
+        null_rate: 0.0
+        value_source:
+          kind: weighted-choice
+          choices:
+            - { value: "CA", weight: 0.40 }
+            - { value: "NY", weight: 0.30 }
+            - { value: "TX", weight: 0.30 }
+      - name: handle
+        null_rate: 0.0
+        value_source:
+          kind: unique
+          expression: "#{internet.username}"
+      - name: zip
+        null_rate: 0.0
+        value_source:
+          kind: yaml-data
+          path: "data/us-zips.yaml"
+          key: "zip_codes"
