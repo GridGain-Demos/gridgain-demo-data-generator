@@ -47,4 +47,28 @@ class DataConfigDeserializationTest {
         assertThat(schema.columns[3].valueSource).isEqualTo(UniqueSpec(expression = "#{internet.username}"))
         assertThat(schema.columns[4].valueSource).isEqualTo(YamlDataSpec(path = "data/us-zips.yaml", key = "zip_codes"))
     }
+
+    @Test
+    fun `deserializes parent-fk-ref and key-suffix kinds`(@TempDir dir: Path) {
+        val data = copy(dir, "data-v2-customer-order.yaml", "data.yaml")
+        val ops = dir.resolve("ops.yaml").also { it.writeText("schema_version: 1\n") }
+        val parsed = ConfigurationParser(logger = logger).parse(data.toFile(), ops.toFile())
+
+        val order = parsed.data.schemas.first { it.name == "order" }
+        val fkColumn = order.columns.first { it.name == "customer_id" }
+        val fk = fkColumn.valueSource as ParentFkRefSpec
+        assertThat(fk.parentSchema).isEqualTo("customer")
+        assertThat(fk.parentColumn).isEqualTo("id")
+        assertThat(fk.cohortBuckets).containsExactly(
+            CohortBucket(share = 0.10, multiplier = 100),
+            CohortBucket(share = 0.40, multiplier = 10),
+            CohortBucket(share = 0.50, multiplier = 1),
+        )
+
+        val idColumn = order.columns.first { it.name == "id" }
+        val ks = idColumn.valueSource as KeySuffixSpec
+        assertThat(ks.baseColumn).isEqualTo("customer_id")
+        assertThat(ks.separator).isEqualTo("-")
+        assertThat(ks.length).isEqualTo(6)
+    }
 }

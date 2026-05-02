@@ -1,0 +1,31 @@
+schema_version: 2
+schemas:
+  - name: customer
+    update_ratio: 0.05
+    columns:
+      - name: id
+        null_rate: 0.0
+        value_source: { kind: sequence, start: 1, step: 1 }
+      - name: name
+        null_rate: 0.0
+        value_source: { kind: datafaker, expression: "#{name.fullName}" }
+  - name: order
+    update_ratio: 0.0
+    columns:
+      - name: customer_id
+        null_rate: 0.0
+        value_source:
+          kind: parent-fk-ref
+          parent_schema: customer
+          parent_column: id
+          cohort_buckets:
+            - { share: 0.10, multiplier: 100 }
+            - { share: 0.40, multiplier: 10 }
+            - { share: 0.50, multiplier: 1 }
+      - name: id
+        null_rate: 0.0
+        value_source:
+          kind: key-suffix
+          base_column: customer_id
+          separator: "-"
+          length: 6
