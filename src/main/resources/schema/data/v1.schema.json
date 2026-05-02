@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gridgain.com/datagen/data-v1.schema.json",
+  "title": "Data Generator data.yaml v1",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": { "const": 1 }
+  },
+  "additionalProperties": true
+}
