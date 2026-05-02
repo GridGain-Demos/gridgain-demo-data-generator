@@ -2,6 +2,8 @@ package com.gridgain.demo.datagen.generation
 
 import com.gridgain.demo.datagen.config.ColumnSpec
 import com.gridgain.demo.datagen.config.DataFakerSpec
+import com.gridgain.demo.datagen.config.KeySuffixSpec
+import com.gridgain.demo.datagen.config.ParentFkRefSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.UniqueSpec
 import com.gridgain.demo.datagen.config.ValueSourceSpec
@@ -35,5 +37,7 @@ class ValueSourceFactory(
             key = spec.key,
             random = Random(seed),
         )
+        is ParentFkRefSpec -> throw NotImplementedError("ParentFkRefSpec value source is not yet implemented")
+        is KeySuffixSpec -> throw NotImplementedError("KeySuffixSpec value source is not yet implemented")
     }
 }
