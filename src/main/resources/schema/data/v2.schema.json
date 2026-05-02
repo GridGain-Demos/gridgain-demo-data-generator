@@ -43,7 +43,9 @@
         { "$ref": "#/$defs/vs_sequence" },
         { "$ref": "#/$defs/vs_unique" },
         { "$ref": "#/$defs/vs_weighted_choice" },
-        { "$ref": "#/$defs/vs_yaml_data" }
+        { "$ref": "#/$defs/vs_yaml_data" },
+        { "$ref": "#/$defs/vs_parent_fk_ref" },
+        { "$ref": "#/$defs/vs_key_suffix" }
       ]
     },
     "vs_datafaker": {
@@ -103,6 +105,40 @@
         "kind": { "const": "yaml-data" },
         "path": { "type": "string", "minLength": 1 },
         "key": { "type": "string", "minLength": 1 }
+      }
+    },
+    "vs_parent_fk_ref": {
+      "type": "object",
+      "required": ["kind", "parent_schema", "parent_column", "cohort_buckets"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "parent-fk-ref" },
+        "parent_schema": { "type": "string", "minLength": 1 },
+        "parent_column": { "type": "string", "minLength": 1 },
+        "cohort_buckets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["share", "multiplier"],
+            "additionalProperties": false,
+            "properties": {
+              "share": { "type": "number", "exclusiveMinimum": 0.0, "maximum": 1.0 },
+              "multiplier": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "vs_key_suffix": {
+      "type": "object",
+      "required": ["kind", "base_column", "separator", "length"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "key-suffix" },
+        "base_column": { "type": "string", "minLength": 1 },
+        "separator": { "type": "string" },
+        "length": { "type": "integer", "minimum": 1, "maximum": 32 }
       }
     }
   }
