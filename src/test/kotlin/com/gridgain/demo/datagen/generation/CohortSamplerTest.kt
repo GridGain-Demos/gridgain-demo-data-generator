@@ -15,7 +15,7 @@ class CohortSamplerTest {
             CohortBucket(share = 0.40, multiplier = 10),
             CohortBucket(share = 0.50, multiplier = 1),
         )
-        val counts = CohortSampler(seed = 42L).assign(parentCount = 1000, buckets = buckets)
+        val counts = CohortSampler(seed = 7L).assign(parentCount = 1000, buckets = buckets)
         val whales = counts.count { it == 100 }
         val mids = counts.count { it == 10 }
         val guppies = counts.count { it == 1 }

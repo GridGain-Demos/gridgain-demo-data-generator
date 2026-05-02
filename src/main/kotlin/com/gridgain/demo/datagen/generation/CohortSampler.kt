@@ -17,26 +17,15 @@ class CohortSampler(seed: Long) {
                 "Adjust the share values so they total 1.0."
             )
         }
-        val slotCounts = allocateSlots(parentCount, buckets)
-        val slots = mutableListOf<Int>()
-        for (i in buckets.indices) {
-            repeat(slotCounts[i]) { slots.add(buckets[i].multiplier) }
+        val cumulative: List<Pair<Double, Int>> =
+            buckets.runningFold(0.0 to 0) { acc, b -> (acc.first + b.share) to b.multiplier }
+                .drop(1)
+        val out = IntArray(parentCount)
+        for (i in 0 until parentCount) {
+            val r = random.nextDouble()
+            // Defensive: r could theoretically reach the last threshold; pick last bucket.
+            out[i] = cumulative.firstOrNull { r < it.first }?.second ?: cumulative.last().second
         }
-        slots.shuffle(random)
-        return slots.toIntArray()
-    }
-
-    private fun allocateSlots(parentCount: Int, buckets: List<CohortBucket>): IntArray {
-        val exact = buckets.map { it.share * parentCount }
-        val counts = IntArray(buckets.size) { exact[it].toInt() }
-        val remainders = DoubleArray(buckets.size) { exact[it] - counts[it] }
-        var allocated = counts.sum()
-        while (allocated < parentCount) {
-            val idx = remainders.indices.maxByOrNull { remainders[it] }!!
-            counts[idx]++
-            remainders[idx] = -1.0
-            allocated++
-        }
-        return counts
+        return out
     }
 }
