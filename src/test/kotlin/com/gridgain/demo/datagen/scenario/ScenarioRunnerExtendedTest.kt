@@ -17,6 +17,7 @@ import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.target.InMemoryTarget
+import com.gridgain.demo.datagen.target.ReadOutcome
 import com.gridgain.demo.datagen.target.Target
 import com.gridgain.demo.datagen.target.WriteOutcome
 import net.datafaker.Faker
@@ -98,6 +99,7 @@ class ScenarioRunnerExtendedTest {
                 return if (n <= 100) WriteOutcome(success = true)
                 else WriteOutcome(success = false, error = RuntimeException("boom"))
             }
+            override fun read(cacheName: String, key: Any): ReadOutcome = ReadOutcome(success = false)
         }
         val scenario = ScenarioSpec(
             name = "until-stop-on-error",

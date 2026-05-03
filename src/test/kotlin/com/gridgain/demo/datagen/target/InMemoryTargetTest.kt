@@ -33,4 +33,15 @@ class InMemoryTargetTest {
         assertThat(outcome.success).isTrue()
         assertThat(outcome.error).isNull()
     }
+
+    @Test
+    fun `records each read call`() {
+        val t = InMemoryTarget()
+        val r = t.read(cacheName = "customer", key = 42L)
+        assertThat(r.success).isTrue()
+        assertThat(r.value).isEqualTo("in-memory-stub")
+        assertThat(t.reads).hasSize(1)
+        assertThat(t.reads[0].cacheName).isEqualTo("customer")
+        assertThat(t.reads[0].key).isEqualTo(42L)
+    }
 }

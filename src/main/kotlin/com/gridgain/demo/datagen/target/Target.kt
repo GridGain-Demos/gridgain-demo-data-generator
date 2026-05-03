@@ -7,8 +7,15 @@ data class WriteOutcome(
     val error: Throwable? = null,
 )
 
+data class ReadOutcome(
+    val success: Boolean,
+    val value: Any? = null,
+    val error: Throwable? = null,
+)
+
 interface Target {
     val supportsReads: Boolean
     val supportsTransactions: Boolean
     fun write(event: BusinessEvent): WriteOutcome
+    fun read(cacheName: String, key: Any): ReadOutcome
 }
