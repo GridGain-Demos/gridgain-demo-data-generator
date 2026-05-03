@@ -9,7 +9,7 @@ class CrossElementValidatorTest {
     @Test
     fun `default validator accepts a v1 envelope`() {
         val data = DataConfig(schemaVersion = 1, schemas = emptyList())
-        val ops = OpsConfig(schemaVersion = 1)
+        val ops = OpsConfig(schemaVersion = 2, scenarios = emptyList())
         val result = DefaultCrossElementValidator().validate(data, ops)
         assertThat(result.errors).isEmpty()
         assertThat(result.warnings).isEmpty()
@@ -18,7 +18,7 @@ class CrossElementValidatorTest {
     @Test
     fun `validator returns a CrossElementValidationResult`() {
         val data = DataConfig(schemaVersion = 1, schemas = emptyList())
-        val ops = OpsConfig(schemaVersion = 1)
+        val ops = OpsConfig(schemaVersion = 2, scenarios = emptyList())
         assertThatCode { DefaultCrossElementValidator().validate(data, ops) }
             .doesNotThrowAnyException()
     }

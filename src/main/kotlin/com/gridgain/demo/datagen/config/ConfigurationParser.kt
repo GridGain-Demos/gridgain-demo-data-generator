@@ -11,7 +11,7 @@ data class ParsedConfiguration(val data: DataConfig, val ops: OpsConfig)
 class ConfigurationParser(
     private val logger: DataGenLogger,
     private val dataMigrationRunner: ConfigMigrationRunner = DataConfigMigrationRunner.create(),
-    private val opsMigrationRunner: ConfigMigrationRunner = ConfigMigrationRunner(emptyList()),
+    private val opsMigrationRunner: ConfigMigrationRunner = OpsConfigMigrationRunner.create(),
     private val crossElementValidator: CrossElementValidator = CompositeCrossElementValidator(
         listOf(
             DefaultCrossElementValidator(),

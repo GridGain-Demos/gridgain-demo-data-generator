@@ -18,7 +18,7 @@ class JsonSchemaValidatorTest {
     @Test
     fun `valid v1 ops yaml passes`() {
         val yaml = "schema_version: 1\n"
-        assertThatCode { JsonSchemaValidator.validateOps(yaml, fileName = "ops.yaml") }
+        assertThatCode { JsonSchemaValidator.validateOps(yaml, fileName = "ops.yaml", version = 1) }
             .doesNotThrowAnyException()
     }
 

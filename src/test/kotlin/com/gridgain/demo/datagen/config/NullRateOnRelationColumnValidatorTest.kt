@@ -15,7 +15,7 @@ class NullRateOnRelationColumnValidatorTest {
             columns = listOf(col("customer_id", ParentFkRefSpec("c", "id", listOf(CohortBucket(1.0, 1))), nullRate = 0.0))
         )
         val data = DataConfig(schemaVersion = 2, schemas = listOf(s))
-        assertThat(NullRateOnRelationColumnValidator().validate(data, OpsConfig(schemaVersion = 1)).errors).isEmpty()
+        assertThat(NullRateOnRelationColumnValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList())).errors).isEmpty()
     }
 
     @Test
@@ -25,7 +25,7 @@ class NullRateOnRelationColumnValidatorTest {
             columns = listOf(col("customer_id", ParentFkRefSpec("c", "id", listOf(CohortBucket(1.0, 1))), nullRate = 0.05))
         )
         val data = DataConfig(schemaVersion = 2, schemas = listOf(s))
-        val r = NullRateOnRelationColumnValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = NullRateOnRelationColumnValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("order.customer_id").contains("null_rate")
     }

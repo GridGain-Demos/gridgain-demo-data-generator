@@ -20,7 +20,7 @@ class RelationReferentialValidatorTest {
             columns = listOf(col("customer_id", ParentFkRefSpec("customer", "id", listOf(CohortBucket(1.0, 1)))))
         )
         val data = DataConfig(schemaVersion = 2, schemas = listOf(customer, order))
-        assertThat(RelationReferentialValidator().validate(data, OpsConfig(schemaVersion = 1)).errors).isEmpty()
+        assertThat(RelationReferentialValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList())).errors).isEmpty()
     }
 
     @Test
@@ -30,7 +30,7 @@ class RelationReferentialValidatorTest {
             columns = listOf(col("customer_id", ParentFkRefSpec("missing", "id", listOf(CohortBucket(1.0, 1)))))
         )
         val data = DataConfig(schemaVersion = 2, schemas = listOf(customer, order))
-        val r = RelationReferentialValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = RelationReferentialValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("order.customer_id").contains("missing")
     }
@@ -42,7 +42,7 @@ class RelationReferentialValidatorTest {
             columns = listOf(col("customer_id", ParentFkRefSpec("customer", "absent", listOf(CohortBucket(1.0, 1)))))
         )
         val data = DataConfig(schemaVersion = 2, schemas = listOf(customer, order))
-        val r = RelationReferentialValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = RelationReferentialValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("customer.absent")
     }

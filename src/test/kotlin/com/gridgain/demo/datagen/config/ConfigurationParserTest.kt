@@ -32,7 +32,8 @@ class ConfigurationParserTest {
         val parsed = parser.parse(dataFile = data.toFile(), opsFile = ops.toFile())
         assertThat(parsed.data.schemaVersion).isEqualTo(2)
         assertThat(parsed.data.schemas).isEmpty()
-        assertThat(parsed.ops.schemaVersion).isEqualTo(1)
+        assertThat(parsed.ops.schemaVersion).isEqualTo(2)
+        assertThat(parsed.ops.scenarios).isEmpty()
     }
 
     @Test

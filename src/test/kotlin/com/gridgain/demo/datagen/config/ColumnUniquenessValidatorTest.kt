@@ -18,7 +18,7 @@ class ColumnUniquenessValidatorTest {
                 SchemaSpec("order", 0.0, listOf(col("id"), col("amount"))),
             ),
         )
-        val r = ColumnUniquenessValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = ColumnUniquenessValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).isEmpty()
     }
 
@@ -30,7 +30,7 @@ class ColumnUniquenessValidatorTest {
                 SchemaSpec("customer", 0.0, listOf(col("id"), col("id"))),
             ),
         )
-        val r = ColumnUniquenessValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = ColumnUniquenessValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0])
             .contains("customer")
@@ -47,7 +47,7 @@ class ColumnUniquenessValidatorTest {
                 SchemaSpec("customer", 0.0, listOf(col("ref"))),
             ),
         )
-        val r = ColumnUniquenessValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = ColumnUniquenessValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0])
             .contains("customer")

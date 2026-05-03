@@ -15,7 +15,7 @@ class CohortBucketSharesValidatorTest {
                 ParentFkRefSpec("c", "id", listOf(CohortBucket(0.7, 1), CohortBucket(0.3, 5)))
             ))))
         )
-        assertThat(CohortBucketSharesValidator().validate(data, OpsConfig(schemaVersion = 1)).errors).isEmpty()
+        assertThat(CohortBucketSharesValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList())).errors).isEmpty()
     }
 
     @Test
@@ -26,7 +26,7 @@ class CohortBucketSharesValidatorTest {
                 ParentFkRefSpec("c", "id", listOf(CohortBucket(0.3, 1), CohortBucket(0.3, 5)))
             ))))
         )
-        val r = CohortBucketSharesValidator().validate(data, OpsConfig(schemaVersion = 1))
+        val r = CohortBucketSharesValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("o.fk").contains("0.6")
     }
