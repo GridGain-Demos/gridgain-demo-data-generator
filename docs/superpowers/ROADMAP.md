@@ -3,7 +3,7 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after Plan 7.5 subproject split landed)
+Last updated: 2026-05-03 (after F5 — explicit BusinessEvent.parentSchemaName)
 
 ---
 
@@ -76,12 +76,6 @@ If a child schema has two `parent-fk-ref` columns pointing to the same parent
 Either add a validator rejecting multi-FK-to-same-parent, or document the
 first-wins semantics explicitly.
 
-### F5 — `BusinessEvent.parentSchemaName` for `Gg8KvTarget` heuristic
-*Source: Plan 6 final review + Plan 6 Task 10 design note.*
-`Gg8KvTarget.write` uses a heuristic (back-infer parent schema from key column
-name) to find which cache to put to. Fragile when two schemas share a key
-column name like `id`. The clean fix: extend `BusinessEvent` to carry
-`parentSchemaName: String` explicitly. Then drop the heuristic.
 
 ### F6 — TRANSACTIONAL cache provisioning for `transaction_scope: business_event`
 *Source: Plan 6 Gg8KvTarget integration discussion.*
@@ -105,6 +99,13 @@ might surface. Decision needed: keep strict (current) or short-circuit when
 ---
 
 ## Closed Follow-ups
+
+### F5 — `BusinessEvent.parentSchemaName` ✅ *(closed 2026-05-03)*
+`BusinessEvent` now carries an explicit `parentSchemaName: String`.
+`BusinessEventGenerator.next()` sets it from `rootSchema.name`.
+`Gg8KvTarget.putAllForEvent` and `Gg9KvTarget.putAllForEvent` look up the
+parent key column directly via `keyColumnByName[event.parentSchemaName]` —
+no more back-infer-from-key-column-name heuristic.
 
 ### F8 — Plugin `DataGenerateTask` classpath split for GG8 vs GG9 ✅ *(closed by Plan 7.5)*
 Plan 7.5 split the data-generator into three subprojects (`-core`, `-gg8`,
