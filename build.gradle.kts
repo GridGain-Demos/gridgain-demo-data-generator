@@ -43,6 +43,12 @@ configurations.all {
 
 tasks.test {
     useJUnitPlatform()
+    // GG8 (Apache Ignite 2.x) thin client uses reflection on java.nio internals;
+    // JDK 17's strong encapsulation blocks this without the --add-opens flag.
+    jvmArgs(
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
+    )
 }
 
 kotlin {

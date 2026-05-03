@@ -48,7 +48,39 @@ class Gg8KvTarget(
     }
 
     override fun write(event: BusinessEvent): WriteOutcome {
-        TODO("Plan 6 Task 10")
+        return try {
+            val ignite = ensureClient()
+            val tx = ignite.transactions().txStart()
+            try {
+                val parentKeyColumn = keyColumnByName.values.firstOrNull { col -> event.parentRow.containsKey(col) }
+                    ?: throw IllegalStateException(
+                        "could not resolve parent schema's key column from event; " +
+                        "event.parentRow keys=${event.parentRow.keys}, registered key columns=${keyColumnByName.values}"
+                    )
+                val parentSchemaName = keyColumnByName.entries.first { it.value == parentKeyColumn }.key
+                putRow(ignite, parentSchemaName, parentKeyColumn, event.parentRow)
+                event.childrenBySchema.forEach { (childSchema, rows) ->
+                    val childKeyColumn = keyColumnByName[childSchema]
+                        ?: throw IllegalStateException("no key column registered for schema '$childSchema'")
+                    rows.forEach { row -> putRow(ignite, childSchema, childKeyColumn, row) }
+                }
+                tx.commit()
+                WriteOutcome(success = true)
+            } catch (e: Exception) {
+                try { tx.rollback() } catch (_: Exception) { /* swallow rollback failure */ }
+                WriteOutcome(success = false, error = e)
+            }
+        } catch (e: Exception) {
+            WriteOutcome(success = false, error = e)
+        }
+    }
+
+    private fun putRow(ignite: IgniteClient, schemaName: String, keyColumn: String, row: Map<String, Any?>) {
+        val key = row[keyColumn] ?: throw IllegalStateException(
+            "row of schema '$schemaName' has null value in key column '$keyColumn'."
+        )
+        val cache = ignite.getOrCreateCache<Any, Map<String, Any?>>(schemaName)
+        cache.put(key, row)
     }
 
     override fun read(cacheName: String, key: Any): ReadOutcome {
