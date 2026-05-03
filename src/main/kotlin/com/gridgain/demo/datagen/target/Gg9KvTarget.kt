@@ -132,7 +132,22 @@ class Gg9KvTarget(
         client.javaClass.getMethod("transactions").invoke(client) as IgniteTransactions
 
     override fun read(cacheName: String, key: Any): ReadOutcome {
-        TODO("Plan 7 Task 7")
+        return try {
+            val ignite = ensureClient()
+            val table = gg9Tables(ignite).table(cacheName) ?: throw IllegalStateException(
+                "GG9 table '$cacheName' does not exist in the cluster."
+            )
+            val keyColumn = keyColumnByName[cacheName]
+                ?: throw IllegalStateException(
+                    "no key column registered for schema '$cacheName'; " +
+                    "registered: ${keyColumnByName.keys}"
+                )
+            val keyTuple = Tuple.create().set(keyColumn, key)
+            val value: Tuple? = table.keyValueView().get(null, keyTuple)
+            ReadOutcome(success = true, value = value)
+        } catch (e: Exception) {
+            ReadOutcome(success = false, error = e)
+        }
     }
 
     override fun close() {
