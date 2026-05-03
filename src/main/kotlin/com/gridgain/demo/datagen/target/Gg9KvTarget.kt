@@ -51,48 +51,11 @@ class Gg9KvTarget(
     }
 
     override fun write(event: BusinessEvent): WriteOutcome {
-        return try {
-            val ignite = ensureClient()
-            // GG9 transaction support is not yet fully integrated. This is a placeholder
-            // that mirrors Gg8KvTarget structure; the transactionScope parameter is accepted
-            // but transaction wrapping is deferred to a future implementation.
-            putAllForEvent(ignite, event)
-            WriteOutcome(success = true)
-        } catch (e: Exception) {
-            WriteOutcome(success = false, error = e)
-        }
-    }
-
-    private fun putAllForEvent(ignite: IgniteClient, event: BusinessEvent) {
-        val parentKeyColumn = keyColumnByName.values.firstOrNull { col -> event.parentRow.containsKey(col) }
-            ?: throw IllegalStateException(
-                "could not resolve parent schema's key column from event; " +
-                "event.parentRow keys=${event.parentRow.keys}, registered key columns=${keyColumnByName.values}"
-            )
-        val parentSchemaName = keyColumnByName.entries.first { it.value == parentKeyColumn }.key
-        putRow(ignite, parentSchemaName, parentKeyColumn, event.parentRow)
-        event.childrenBySchema.forEach { (childSchema, rows) ->
-            val childKeyColumn = keyColumnByName[childSchema]
-                ?: throw IllegalStateException("no key column registered for schema '$childSchema'")
-            rows.forEach { row -> putRow(ignite, childSchema, childKeyColumn, row) }
-        }
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    private fun putRow(ignite: IgniteClient, schemaName: String, keyColumn: String, row: Map<String, Any?>) {
-        // GG9 KV write implementation is deferred. Placeholder maintains API compatibility.
-        // TODO: Implement GG9 table.upsert() or recordView.upsert() once client API is stable.
+        TODO("Plan 7 Task 6")
     }
 
     override fun read(cacheName: String, key: Any): ReadOutcome {
-        return try {
-            val ignite = ensureClient()
-            // GG9 KV read implementation is deferred. Placeholder maintains API compatibility.
-            // TODO: Implement GG9 table.get() or recordView.get() once client API is stable.
-            ReadOutcome(success = true, value = null)
-        } catch (e: Exception) {
-            ReadOutcome(success = false, error = e)
-        }
+        TODO("Plan 7 Task 7")
     }
 
     override fun close() {
