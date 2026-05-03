@@ -35,6 +35,10 @@ class WeightedChoiceValueSource(
 
     override fun next(ctx: GenerationContext): Any {
         val r = random.nextDouble() * totalWeight
-        return cumulative.first { r < it.first }.second
+        // firstOrNull + last guards the boundary: Random.nextDouble() is contractually [0.0, 1.0)
+        // so r < totalWeight currently always holds, but a misbehaving Random could push r right
+        // up to totalWeight; degrade gracefully to the final bucket rather than throwing
+        // NoSuchElementException.
+        return (cumulative.firstOrNull { r < it.first } ?: cumulative.last()).second
     }
 }

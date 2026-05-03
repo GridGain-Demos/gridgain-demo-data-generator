@@ -61,4 +61,19 @@ class OutputLayoutTest {
         assertThat(Files.isDirectory(l.provisioningGg8)).isTrue()
         assertThat(Files.isDirectory(l.provisioningGg9)).isTrue()
     }
+
+    @Test
+    fun `ensureBaseDirectories throws CorruptedStateException when a regular file blocks a directory`(@TempDir tmp: Path) {
+        // Pre-create a regular file at the path where ensureBaseDirectories expects a directory.
+        val generatorRoot = tmp.resolve("data-generator")
+        Files.createDirectories(generatorRoot)
+        Files.write(generatorRoot.resolve("provisioning"), "stray file content".toByteArray())
+
+        val layout = OutputLayout(tmp)
+        org.assertj.core.api.Assertions.assertThatThrownBy { layout.ensureBaseDirectories() }
+            .isInstanceOf(com.gridgain.demo.datagen.errors.CorruptedStateException::class.java)
+            .hasMessageContaining("expected directory")
+            .hasMessageContaining("provisioning")
+            .hasMessageContaining("Remove or rename")
+    }
 }

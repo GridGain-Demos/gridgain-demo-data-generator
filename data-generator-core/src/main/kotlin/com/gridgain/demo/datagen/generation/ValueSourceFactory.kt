@@ -19,7 +19,7 @@ class ValueSourceFactory(
 ) {
 
     fun build(column: ColumnSpec): ValueSource {
-        val core = buildCore(column.valueSource)
+        val core = buildCore(column)
         return if (column.nullRate > 0.0) {
             NullRateApplicator(core, column.nullRate, Random(seed + column.name.hashCode()))
         } else {
@@ -27,15 +27,18 @@ class ValueSourceFactory(
         }
     }
 
-    private fun buildCore(spec: ValueSourceSpec): ValueSource = when (spec) {
+    private fun buildCore(column: ColumnSpec): ValueSource = when (val spec = column.valueSource) {
         is SequenceSpec -> SequenceValueSource(start = spec.start, step = spec.step)
         is DataFakerSpec -> DataFakerValueSource(spec.expression)
         is UniqueSpec -> UniqueValueSource(spec.expression, maxRetries = uniqueMaxRetries)
-        is WeightedChoiceSpec -> WeightedChoiceValueSource(spec.choices, seed = seed)
+        is WeightedChoiceSpec -> WeightedChoiceValueSource(spec.choices, seed = seed + column.name.hashCode())
         is YamlDataSpec -> YamlBackedValueSource(
             path = yamlDataRoot.resolve(spec.path),
             key = spec.key,
-            random = Random(seed),
+            // Decorrelate per column — without this, two yaml-backed columns in the same schema
+            // (sharing the same seed) draw identical sequences. Mirrors KeySuffixValueSource's
+            // pattern. (F3.)
+            random = Random(seed + column.name.hashCode()),
         )
         is ParentFkRefSpec -> ParentFkRefValueSource(
             parentSchema = spec.parentSchema,
