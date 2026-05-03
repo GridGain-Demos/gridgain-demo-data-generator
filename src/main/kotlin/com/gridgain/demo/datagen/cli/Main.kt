@@ -1,3 +1,4 @@
+@file:JvmName("Main")
 package com.gridgain.demo.datagen.cli
 
 import com.gridgain.demo.datagen.config.ConfigurationParser
