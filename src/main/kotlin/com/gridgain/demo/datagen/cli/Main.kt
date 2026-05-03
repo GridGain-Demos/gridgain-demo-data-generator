@@ -3,6 +3,7 @@ package com.gridgain.demo.datagen.cli
 
 import com.gridgain.demo.datagen.config.ConfigurationParser
 import com.gridgain.demo.datagen.config.Gg8KvTargetSpec
+import com.gridgain.demo.datagen.config.Gg9KvTargetSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
@@ -12,6 +13,7 @@ import com.gridgain.demo.datagen.runtime.RunId
 import com.gridgain.demo.datagen.scenario.ScenarioResult
 import com.gridgain.demo.datagen.scenario.ScenarioRunner
 import com.gridgain.demo.datagen.target.Gg8KvTarget
+import com.gridgain.demo.datagen.target.Gg9KvTarget
 import com.gridgain.demo.datagen.target.Target
 import net.datafaker.Faker
 import org.slf4j.LoggerFactory
@@ -47,6 +49,11 @@ fun main(args: Array<String>) {
 
         val target: Target = when (targetSpec) {
             is Gg8KvTargetSpec -> Gg8KvTarget(
+                clusterName = targetSpec.clusterName,
+                keyColumnByName = keyColumnByName,
+                transactionScope = scenario.transactionScope,
+            )
+            is Gg9KvTargetSpec -> Gg9KvTarget(
                 clusterName = targetSpec.clusterName,
                 keyColumnByName = keyColumnByName,
                 transactionScope = scenario.transactionScope,

@@ -191,5 +191,6 @@ class ScenarioTargetValidator : CrossElementValidator {
 
     private fun capabilitiesFor(target: TargetSpec): Pair<Boolean, Boolean> = when (target) {
         is Gg8KvTargetSpec -> true to true
+        is Gg9KvTargetSpec -> true to true
     }
 }
