@@ -1,5 +1,12 @@
 package com.gridgain.demo.datagen.provisioning
 
+import com.gridgain.demo.client.gg8.DemoAddressFinder
+import org.apache.ignite.Ignition
+import org.apache.ignite.cache.CacheAtomicityMode
+import org.apache.ignite.cache.CacheKeyConfiguration
+import org.apache.ignite.client.ClientCacheConfiguration
+import org.apache.ignite.client.IgniteClient
+import org.apache.ignite.configuration.ClientConfiguration
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -29,7 +36,41 @@ class Gg8XmlProvisioner(
     }
 
     override fun apply(plan: ProvisioningPlan): ProvisioningOutcome {
-        // Implemented in Task 8.
-        throw NotImplementedError("Gg8XmlProvisioner.apply lands in Plan 9 Task 8")
+        val cfg = ClientConfiguration().setAddressesFinder(DemoAddressFinder(clusterName))
+        val created = mutableListOf<String>()
+        val existed = mutableListOf<String>()
+        val errors = mutableListOf<String>()
+        val client: IgniteClient = try {
+            Ignition.startClient(cfg)
+        } catch (e: Exception) {
+            return ProvisioningOutcome(emptyList(), emptyList(), emptyList(), listOf(
+                "Gg8XmlProvisioner.apply could not connect to GG8 cluster '$clusterName': ${e.message}. " +
+                "Verify the cluster is reachable, client-endpoints.yaml is on the resolution path, " +
+                "and the cluster name matches the clusters[].name entry."
+            ))
+        }
+        client.use { ignite ->
+            val existing: Set<String> = ignite.cacheNames().toSet()
+            for (d in plan.descriptors) {
+                val alreadyExists = d.schemaName in existing
+                try {
+                    val cacheCfg = ClientCacheConfiguration().apply {
+                        setName(d.schemaName)
+                        setAtomicityMode(if (d.transactional) CacheAtomicityMode.TRANSACTIONAL else CacheAtomicityMode.ATOMIC)
+                        d.affinityColumn?.let { setKeyConfiguration(CacheKeyConfiguration("java.lang.Object", it)) }
+                    }
+                    ignite.getOrCreateCache<Any, Any>(cacheCfg)
+                    if (alreadyExists) existed.add(d.schemaName) else created.add(d.schemaName)
+                } catch (e: Exception) {
+                    errors.add(
+                        "Gg8XmlProvisioner.apply failed for cache '${d.schemaName}': ${e.message}. " +
+                        "If the cache already exists with a different config (atomicityMode, affinityKey, or " +
+                        "backups), GG8's getOrCreateCache rejects the call. Either tear down the cache and re-run, " +
+                        "or align data.yaml to the existing cache's config."
+                    )
+                }
+            }
+        }
+        return ProvisioningOutcome(emptyList(), created, existed, errors)
     }
 }
