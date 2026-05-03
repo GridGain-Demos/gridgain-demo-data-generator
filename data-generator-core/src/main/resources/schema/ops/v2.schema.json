@@ -23,6 +23,7 @@
         "duration": { "$ref": "#/$defs/duration" },
         "stop_conditions": { "type": "array", "items": { "$ref": "#/$defs/stop_condition" } },
         "transaction_scope": { "enum": ["business_event", "none"] },
+        "provisioning": { "enum": ["skip", "emit", "apply"], "default": "skip" },
         "read_ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0 }
       }
     },

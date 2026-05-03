@@ -21,6 +21,7 @@ data class ScenarioSpec(
     val duration: DurationSpec,
     @JsonProperty("stop_conditions") val stopConditions: List<StopConditionSpec> = emptyList(),
     @JsonProperty("transaction_scope") val transactionScope: TransactionScope = TransactionScope.NONE,
+    val provisioning: ProvisioningMode = ProvisioningMode.SKIP,
     @JsonProperty("read_ratio") val readRatio: Double,
 )
 
