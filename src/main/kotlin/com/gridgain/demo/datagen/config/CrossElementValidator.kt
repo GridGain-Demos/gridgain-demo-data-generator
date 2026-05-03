@@ -116,3 +116,25 @@ class CohortBucketSharesValidator : CrossElementValidator {
         return CrossElementValidationResult(errors = errors, warnings = emptyList())
     }
 }
+
+class ScenarioRootSchemaValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        val knownSchemas = data.schemas.map { it.name }.toSet()
+        val seenNames = mutableSetOf<String>()
+        for (scenario in ops.scenarios) {
+            if (!seenNames.add(scenario.name)) {
+                errors += "duplicate scenario name '${scenario.name}' in ops.yaml; " +
+                    "scenario names must be unique."
+            }
+            for (root in scenario.rootSchemas) {
+                if (root !in knownSchemas) {
+                    errors += "scenario '${scenario.name}' references root_schema '$root' " +
+                        "which is not declared in data.yaml. " +
+                        "Available schemas: ${knownSchemas.joinToString(", ")}."
+                }
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}
