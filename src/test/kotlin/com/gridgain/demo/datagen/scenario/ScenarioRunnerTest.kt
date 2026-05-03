@@ -21,14 +21,14 @@ import kotlin.test.Test
 class ScenarioRunnerTest {
 
     private fun simpleData() = DataConfig(2, listOf(
-        SchemaSpec("customer", 0.0, listOf(ColumnSpec("id", 0.0, SequenceSpec(1, 1))))
+        SchemaSpec("customer", 0.0, listOf(ColumnSpec("id", 0.0, key = true, valueSource = SequenceSpec(1, 1))))
     ))
 
     private fun runner(dir: Path, scenario: ScenarioSpec, target: InMemoryTarget = InMemoryTarget()): ScenarioRunner {
         val data = simpleData()
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
-        return ScenarioRunner(scenario = scenario, generator = gen, target = target)
+        return ScenarioRunner(scenario = scenario, data = data, generator = gen, target = target)
     }
 
     @Test
