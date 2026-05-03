@@ -17,7 +17,7 @@ class Gg8KvTargetWriteTest {
             val parent = LinkedHashMap<String, Any?>().apply {
                 put("id", 1001L); put("name", "Alice")
             }
-            val event = BusinessEvent(parentRow = parent, childrenBySchema = emptyMap())
+            val event = BusinessEvent(parentSchemaName = cacheName, parentRow = parent, childrenBySchema = emptyMap())
             val outcome = target.write(event)
             if (!outcome.success) outcome.error?.printStackTrace()
             assertThat(outcome.success)

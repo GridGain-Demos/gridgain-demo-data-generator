@@ -76,13 +76,12 @@ class Gg8KvTarget(
     }
 
     private fun putAllForEvent(ignite: IgniteClient, event: BusinessEvent) {
-        val parentKeyColumn = keyColumnByName.values.firstOrNull { col -> event.parentRow.containsKey(col) }
+        val parentKeyColumn = keyColumnByName[event.parentSchemaName]
             ?: throw IllegalStateException(
-                "could not resolve parent schema's key column from event; " +
-                "event.parentRow keys=${event.parentRow.keys}, registered key columns=${keyColumnByName.values}"
+                "no key column registered for parent schema '${event.parentSchemaName}'; " +
+                "registered: ${keyColumnByName.keys}"
             )
-        val parentSchemaName = keyColumnByName.entries.first { it.value == parentKeyColumn }.key
-        putRow(ignite, parentSchemaName, parentKeyColumn, event.parentRow)
+        putRow(ignite, event.parentSchemaName, parentKeyColumn, event.parentRow)
         event.childrenBySchema.forEach { (childSchema, rows) ->
             val childKeyColumn = keyColumnByName[childSchema]
                 ?: throw IllegalStateException("no key column registered for schema '$childSchema'")

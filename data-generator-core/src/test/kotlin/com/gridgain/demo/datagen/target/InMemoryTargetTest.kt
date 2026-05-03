@@ -8,7 +8,7 @@ class InMemoryTargetTest {
 
     private fun event(id: Long): BusinessEvent {
         val parent = LinkedHashMap<String, Any?>().apply { put("id", id) }
-        return BusinessEvent(parentRow = parent, childrenBySchema = emptyMap())
+        return BusinessEvent(parentSchemaName = "test", parentRow = parent, childrenBySchema = emptyMap())
     }
 
     @Test

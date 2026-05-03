@@ -16,7 +16,7 @@ class Gg9KvTargetReadTest {
         Gg9KvTarget(clusterName, keyColumnByName = mapOf(tableName to "id")).use { target ->
             val key = 2002L
             val parent = LinkedHashMap<String, Any?>().apply { put("id", key); put("name", "hello") }
-            val writeOutcome = target.write(BusinessEvent(parentRow = parent, childrenBySchema = emptyMap()))
+            val writeOutcome = target.write(BusinessEvent(parentSchemaName = tableName, parentRow = parent, childrenBySchema = emptyMap()))
             if (!writeOutcome.success) writeOutcome.error?.printStackTrace()
             val outcome = target.read(tableName, key)
             if (!outcome.success) outcome.error?.printStackTrace()

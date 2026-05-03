@@ -8,6 +8,7 @@ import com.gridgain.demo.datagen.errors.MisconfigurationException
 import net.datafaker.Faker
 
 data class BusinessEvent(
+    val parentSchemaName: String,
     val parentRow: LinkedHashMap<String, Any?>,
     val childrenBySchema: Map<String, List<LinkedHashMap<String, Any?>>>,
 )
@@ -55,7 +56,11 @@ class BusinessEventGenerator(
             val childCount = counts[0]
             plan.schemaName to (0 until childCount).map { plan.generator.next(parentRow = parentRow) }
         }
-        return BusinessEvent(parentRow = parentRow, childrenBySchema = children)
+        return BusinessEvent(
+            parentSchemaName = rootSchema.name,
+            parentRow = parentRow,
+            childrenBySchema = children,
+        )
     }
 
     private data class ChildPlan(
