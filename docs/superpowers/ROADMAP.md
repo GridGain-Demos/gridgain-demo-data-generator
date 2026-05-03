@@ -3,7 +3,7 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after Plan 6 final review + transaction-scope-optional change)
+Last updated: 2026-05-03 (after Plan 8 end-to-end smoke ✅ via plugin)
 
 ---
 
@@ -92,11 +92,24 @@ might surface. Decision needed: keep strict (current) or short-circuit when
 
 ---
 
+## Plan 8 — Plugin Invocation *(complete)*
+
+`cd TaxiDemo && ./gradlew dataGenerate --scenario <name>` runs end-to-end
+through the plugin. Smoke verified on `taxi-demo-gcp-8a`:
+`success_count: 200, error_count: 0, achieved_rate: ~7.9 ops/s, stop_reason: count reached`.
+
+All seven tasks done — see `plans/2026-05-03-data-generator-plan-8-plugin-invocation.md`.
+Two late fixes that landed during smoke:
+- Data-generator `cli/Main.kt` needed `@file:JvmName("Main")` so the forked
+  JVM could find the main class (Kotlin compiles top-level `main` to `MainKt`
+  by default).
+- Plugin `DataGenerateTask` `@Option` annotations had to move from
+  `@get:Option` to `@set:Option` — Gradle 9 only treats annotated methods that
+  take a parameter as value-options.
+
 ## Remaining Plans (not yet drafted)
 
-Each plan produces working, testable software on its own. Order is suggested
-but flexible; the only hard ordering is that Plan 8 (plugin invocation) is the
-critical path for the user's near-term workflow.
+Each plan produces working, testable software on its own. Order is flexible.
 
 ### Plan 7 — GG9 KV Target
 Mirror Plan 6 for GridGain 9. Different transaction API (single `IgniteClient`
@@ -105,28 +118,6 @@ that handles both KV and SQL; `KeyValueView` instead of `cache`). Adds
 `is Gg9KvTargetSpec ->` branch each in `ValueSourceFactory.capabilitiesFor`.
 Integration tests env-gated by `DATAGEN_GG9_*`. Roughly the same shape and
 size as Plan 6.
-
-### Plan 8 — Plugin Invocation *(near-term priority)*
-Make the data generator runnable from inside the gradle plugin, so demo flows
-look like `cd TaxiDemo && ./gradlew dataGenerate`. Sub-pieces:
-
-1. Add `maven-publish` to `gridgain-demo-data-generator/build.gradle.kts`;
-   verify `publishToMavenLocal` produces a usable jar.
-2. Add `implementation("com.gridgain.demo:gridgain-demo-data-generator:...")`
-   to `gridgain-demo-gradle-plugin/build.gradle.kts`.
-3. Build a small adapter in the plugin (`DataGeneratorRunnerAction` or similar)
-   that:
-   - Reads the plugin's `demoConfigFile` to learn data.yaml / ops.yaml paths
-     (or accepts CLI args).
-   - Resolves the cluster's `client-endpoints.yaml` from the plugin's existing
-     output (`build/gridgain/output/client/client-endpoints.yaml`).
-   - Constructs `ConfigurationParser`, runs the scenario named via task arg,
-     writes the result to `demoOutputDirectory/data-generator/runs/<run-id>/`.
-4. Plugin gradle task `dataGenerate` that wires it all up.
-5. End-to-end smoke that runs against the live cluster.
-
-Drafted in `docs/superpowers/plans/2026-05-03-data-generator-plan-8-plugin-invocation.md`
-(same date, started after this roadmap).
 
 ### Plan 9 — Provisioning Emit + Apply
 Per spec §4. Generates GG8 cache config XML and GG9 SQL DDL from `data.yaml`

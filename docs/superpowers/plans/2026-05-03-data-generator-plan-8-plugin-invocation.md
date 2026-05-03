@@ -1,4 +1,15 @@
-# Data Generator — Plan 8: Plugin Invocation
+# Data Generator — Plan 8: Plugin Invocation *(complete 2026-05-03)*
+
+**Status:** ✅ All 7 tasks done. End-to-end smoke verified on `taxi-demo-gcp-8a`:
+`success_count: 200, error_count: 0, achieved_rate: ~7.9 ops/s, stop_reason: count reached`.
+
+**Late fixes during smoke (committed after Task 6):**
+- `cli/Main.kt` — added `@file:JvmName("Main")` so the forked JVM can find
+  the main class (Kotlin compiles top-level `main` to `MainKt` by default
+  but the plugin's `DataGenerateAction` launches `...cli.Main`).
+- Plugin's `DataGenerateTask` — moved `@Option` annotations from `@get:Option`
+  to `@set:Option`. Gradle 9 only treats annotated methods that take a
+  parameter as value-options; on a Kotlin `var` that's the setter.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
