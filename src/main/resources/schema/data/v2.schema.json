@@ -34,6 +34,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "null_rate": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "affinity": { "type": "boolean" },
         "value_source": { "$ref": "#/$defs/value_source" }
       }
     },
