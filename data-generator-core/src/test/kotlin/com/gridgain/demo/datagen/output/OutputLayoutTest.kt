@@ -2,6 +2,7 @@ package com.gridgain.demo.datagen.output
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 
@@ -40,5 +41,24 @@ class OutputLayoutTest {
         assertThat(layout.provisioning.toFile()).exists().isDirectory()
         assertThat(layout.state.toFile()).exists().isDirectory()
         // runs/<run-id>/ is created on demand, not by ensureBaseDirectories.
+    }
+
+    @Test
+    fun `provisioningGg8 sits under provisioning`(@TempDir tmp: Path) {
+        val l = OutputLayout(tmp)
+        assertThat(l.provisioningGg8).isEqualTo(tmp.resolve("data-generator/provisioning/gg8"))
+    }
+
+    @Test
+    fun `provisioningGg9 sits under provisioning`(@TempDir tmp: Path) {
+        val l = OutputLayout(tmp)
+        assertThat(l.provisioningGg9).isEqualTo(tmp.resolve("data-generator/provisioning/gg9"))
+    }
+
+    @Test
+    fun `ensureBaseDirectories creates both flavor subdirs`(@TempDir tmp: Path) {
+        val l = OutputLayout(tmp).also { it.ensureBaseDirectories() }
+        assertThat(Files.isDirectory(l.provisioningGg8)).isTrue()
+        assertThat(Files.isDirectory(l.provisioningGg9)).isTrue()
     }
 }

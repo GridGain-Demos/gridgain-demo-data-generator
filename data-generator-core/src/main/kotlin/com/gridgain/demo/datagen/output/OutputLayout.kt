@@ -6,6 +6,8 @@ import java.nio.file.Path
 class OutputLayout(demoOutputDirectory: Path) {
     val generatorRoot: Path = demoOutputDirectory.resolve("data-generator")
     val provisioning: Path = generatorRoot.resolve("provisioning")
+    val provisioningGg8: Path = provisioning.resolve("gg8")
+    val provisioningGg9: Path = provisioning.resolve("gg9")
     val state: Path = generatorRoot.resolve("state")
     val stateFile: Path = state.resolve("state.yaml")
     private val runs: Path = generatorRoot.resolve("runs")
@@ -17,6 +19,8 @@ class OutputLayout(demoOutputDirectory: Path) {
     fun ensureBaseDirectories() {
         Files.createDirectories(generatorRoot)
         Files.createDirectories(provisioning)
+        Files.createDirectories(provisioningGg8)
+        Files.createDirectories(provisioningGg9)
         Files.createDirectories(state)
     }
 }
