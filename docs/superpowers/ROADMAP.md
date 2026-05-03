@@ -3,14 +3,14 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after Plan 8 end-to-end smoke ✅ via plugin)
+Last updated: 2026-05-03 (after Plan 7 GG9 KV target landed)
 
 ---
 
 ## Current State
 
-Plans 1–6 implemented. **142 tests pass** from a clean build (139 unit + 3
-env-gated integration tests against a GG8 cluster). The data generator can:
+Plans 1–8 implemented. **148 tests pass** from a clean build (142 unit + 6
+env-gated integration tests against GG8/GG9 clusters). The data generator can:
 
 - Parse and migrate two yaml configs (`data.yaml` + `ops.yaml`) via the five-stage
   pipeline (read → migrate → JSONSchema → cross-element → deserialize).
@@ -26,8 +26,13 @@ env-gated integration tests against a GG8 cluster). The data generator can:
   and `read_ratio` can pick keys to read.
 - Write to a real GG8 cluster via `Gg8KvTarget` (lazy thin client, optional
   transaction wrapping when `transaction_scope: business_event`).
+- Write to a real GG9 cluster via `Gg9KvTarget` (lazy `IgniteClient`,
+  `KeyValueView<Tuple, Tuple>`, optional transaction wrapping when
+  `transaction_scope: business_event`). Smoke against a live GG9 cluster
+  pending — see follow-up F8.
 
-Verified end-to-end against the live `taxi-demo-gcp-8a` cluster.
+GG8 path verified end-to-end against the live `taxi-demo-gcp-8a` cluster
+via the plugin (Plan 8).
 
 ---
 
@@ -90,6 +95,27 @@ Plan 7 adds `Gg9KvTargetSpec` and we get more test fixtures, a fragility bug
 might surface. Decision needed: keep strict (current) or short-circuit when
 `ops.targets` is empty?
 
+### F8 — Plugin `DataGenerateTask` classpath split for GG8 vs GG9
+*Source: Plan 7 build wiring.*
+`DataGenerateTask` (Plan 8) bundles `ignite-core:8.9.18` into the forked JVM
+unconditionally. With Plan 7 landed, the task must inspect the resolved
+target's `kind` and add `ignite-core:8.9.18` (gg8-kv) OR `ignite-client:9.1.3`
+(gg9-kv) — never both. Until F8 lands, GG9 scenarios driven by the plugin
+will fail at fork classpath assembly time. The CLI can be invoked directly
+with the right jars in the meantime.
+
+### F9 — Eliminate reflection workaround in `Gg9KvTarget`
+*Source: Plan 7 Task 6 implementation.*
+GG8's `ignite-core` and GG9's `ignite-api` both define
+`org.apache.ignite.client.IgniteClient` and `org.apache.ignite.Ignite` with
+the same FQN. The Kotlin compiler resolves `client.tables()` and
+`client.transactions()` against GG8's `Ignite` (no such methods). Workaround:
+private `gg9Tables()` and `gg9Transactions()` helpers in `Gg9KvTarget` use
+`javaClass.getMethod(name).invoke(client)` to bypass the ambiguous superinterface
+and cast to GG9-only types. Proper structural fix: separate source sets per
+client version, or move GG8 to its own subproject, or per-version wrapper in
+`gg9-client-finder`. Closes naturally if F8 splits classpaths at build time.
+
 ---
 
 ## Plan 8 — Plugin Invocation *(complete)*
@@ -107,17 +133,21 @@ Two late fixes that landed during smoke:
   `@get:Option` to `@set:Option` — Gradle 9 only treats annotated methods that
   take a parameter as value-options.
 
+## Plan 7 — GG9 KV Target *(complete)*
+
+`Gg9KvTarget` lives at `src/main/kotlin/com/gridgain/demo/datagen/target/Gg9KvTarget.kt`.
+Lazy `IgniteClient` via `gg9-client-finder.DemoAddressFinder`; KV access through
+`KeyValueView<Tuple, Tuple>`; optional `business_event` transaction wrapping via
+`runInTransaction { tx -> ... }`. CLI dispatches on `is Gg9KvTargetSpec ->`.
+Env-gated integration tests for write + read.
+
+All 9 tasks done — see `plans/2026-05-03-data-generator-plan-7-gg9-kv-target.md`.
+Live-cluster smoke deferred until F8 (plugin classpath split) lands so the
+plugin can drive a GG9 scenario.
+
 ## Remaining Plans (not yet drafted)
 
 Each plan produces working, testable software on its own. Order is flexible.
-
-### Plan 7 — GG9 KV Target
-Mirror Plan 6 for GridGain 9. Different transaction API (single `IgniteClient`
-that handles both KV and SQL; `KeyValueView` instead of `cache`). Adds
-`Gg9KvTargetSpec` to `TargetSpec`, `Gg9KvTarget` runtime, and one new
-`is Gg9KvTargetSpec ->` branch each in `ValueSourceFactory.capabilitiesFor`.
-Integration tests env-gated by `DATAGEN_GG9_*`. Roughly the same shape and
-size as Plan 6.
 
 ### Plan 9 — Provisioning Emit + Apply
 Per spec §4. Generates GG8 cache config XML and GG9 SQL DDL from `data.yaml`
