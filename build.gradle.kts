@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm") version "2.2.20"
+    `maven-publish`
 }
 
 group = "com.gridgain.demo"
@@ -53,4 +54,12 @@ tasks.test {
 
 kotlin {
     jvmToolchain(17)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
 }
