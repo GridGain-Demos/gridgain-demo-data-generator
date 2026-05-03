@@ -25,7 +25,7 @@ class Gg8KvTarget(
 
     @Volatile private var client: IgniteClient? = null
 
-    fun ensureClient(): IgniteClient {
+    private fun ensureClient(): IgniteClient {
         val existing = client
         if (existing != null) return existing
         synchronized(this) {
