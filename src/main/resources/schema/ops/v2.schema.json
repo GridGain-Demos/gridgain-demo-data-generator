@@ -109,7 +109,10 @@
       "properties": { "kind": { "const": "external_signal" } }
     },
     "target": {
-      "oneOf": [ { "$ref": "#/$defs/target_gg8_kv" } ]
+      "oneOf": [
+        { "$ref": "#/$defs/target_gg8_kv" },
+        { "$ref": "#/$defs/target_gg9_kv" }
+      ]
     },
     "target_gg8_kv": {
       "type": "object",
@@ -117,6 +120,16 @@
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "gg8-kv" },
+        "name": { "type": "string", "minLength": 1 },
+        "cluster_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "target_gg9_kv": {
+      "type": "object",
+      "required": ["kind", "name", "cluster_name"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "gg9-kv" },
         "name": { "type": "string", "minLength": 1 },
         "cluster_name": { "type": "string", "minLength": 1 }
       }

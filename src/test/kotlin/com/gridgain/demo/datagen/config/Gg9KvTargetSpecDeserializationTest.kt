@@ -33,4 +33,23 @@ class Gg9KvTargetSpecDeserializationTest {
         val target: TargetSpec = mapper.readValue(yaml, TargetSpec::class.java)
         assertThat(target).isInstanceOf(Gg8KvTargetSpec::class.java)
     }
+
+    @Test
+    fun `ops v2 schema accepts a gg9-kv target`() {
+        val yaml = """
+            schema_version: 2
+            targets:
+              - { kind: gg9-kv, name: gg9-trip, cluster_name: trip-cluster-9 }
+            scenarios:
+              - name: s
+                target: gg9-trip
+                root_schemas: [customer]
+                rate: { kind: constant, ops_per_second: 50 }
+                duration: { kind: count, value: 100 }
+                transaction_scope: business_event
+                read_ratio: 0.0
+        """.trimIndent()
+        // No exception means the schema accepted the document.
+        JsonSchemaValidator.validateOps(yaml, fileName = "ops.yaml")
+    }
 }
