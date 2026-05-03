@@ -7,7 +7,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": 2 },
-    "scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } }
+    "scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } },
+    "targets": { "type": "array", "items": { "$ref": "#/$defs/target" } }
   },
   "$defs": {
     "scenario": {
@@ -16,6 +17,7 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },
+        "target": { "type": "string" },
         "root_schemas": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "rate": { "$ref": "#/$defs/rate" },
         "duration": { "$ref": "#/$defs/duration" },
@@ -105,6 +107,19 @@
     "sc_external_signal": {
       "type": "object", "required": ["kind"], "additionalProperties": false,
       "properties": { "kind": { "const": "external_signal" } }
+    },
+    "target": {
+      "oneOf": [ { "$ref": "#/$defs/target_gg8_kv" } ]
+    },
+    "target_gg8_kv": {
+      "type": "object",
+      "required": ["kind", "name", "cluster_name"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "gg8-kv" },
+        "name": { "type": "string", "minLength": 1 },
+        "cluster_name": { "type": "string", "minLength": 1 }
+      }
     }
   }
 }

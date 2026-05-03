@@ -13,13 +13,13 @@ class KeyColumnValidatorTest {
     @Test
     fun `accepts a schema with exactly one key column`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(col("id", isKey = true), col("name")))))
-        assertThat(KeyColumnValidator().validate(data, OpsConfig(2, emptyList())).errors).isEmpty()
+        assertThat(KeyColumnValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList())).errors).isEmpty()
     }
 
     @Test
     fun `rejects a schema with no key column`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(col("id"), col("name")))))
-        val r = KeyColumnValidator().validate(data, OpsConfig(2, emptyList()))
+        val r = KeyColumnValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("customer").contains("no key column")
     }
@@ -27,7 +27,7 @@ class KeyColumnValidatorTest {
     @Test
     fun `rejects a schema with multiple key columns`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(col("a", isKey = true), col("b", isKey = true)))))
-        val r = KeyColumnValidator().validate(data, OpsConfig(2, emptyList()))
+        val r = KeyColumnValidator().validate(data, OpsConfig(schemaVersion = 2, scenarios = emptyList()))
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("customer").contains("more than one key column")
     }

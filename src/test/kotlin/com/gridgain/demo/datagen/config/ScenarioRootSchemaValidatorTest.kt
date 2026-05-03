@@ -17,14 +17,14 @@ class ScenarioRootSchemaValidatorTest {
     @Test
     fun `accepts a scenario whose root schema exists`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(col()))))
-        val ops = OpsConfig(2, listOf(scenario("s", listOf("customer"))))
+        val ops = OpsConfig(schemaVersion = 2, scenarios = listOf(scenario("s", listOf("customer"))))
         assertThat(ScenarioRootSchemaValidator().validate(data, ops).errors).isEmpty()
     }
 
     @Test
     fun `rejects a scenario whose root schema is unknown`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(col()))))
-        val ops = OpsConfig(2, listOf(scenario("s", listOf("missing"))))
+        val ops = OpsConfig(schemaVersion = 2, scenarios = listOf(scenario("s", listOf("missing"))))
         val r = ScenarioRootSchemaValidator().validate(data, ops)
         assertThat(r.errors).hasSize(1)
         assertThat(r.errors[0]).contains("s").contains("missing")
@@ -33,7 +33,7 @@ class ScenarioRootSchemaValidatorTest {
     @Test
     fun `rejects duplicate scenario names`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(col()))))
-        val ops = OpsConfig(2, listOf(
+        val ops = OpsConfig(schemaVersion = 2, scenarios = listOf(
             scenario("s", listOf("customer")),
             scenario("s", listOf("customer")),
         ))
