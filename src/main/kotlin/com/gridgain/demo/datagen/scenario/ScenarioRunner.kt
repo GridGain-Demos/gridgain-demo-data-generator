@@ -7,7 +7,6 @@ import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SteppedRateSpec
 import com.gridgain.demo.datagen.config.TimeDurationSpec
 import com.gridgain.demo.datagen.config.UntilStopDurationSpec
-import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.target.Target
 import java.time.Duration
@@ -17,6 +16,8 @@ class ScenarioRunner(
     private val scenario: ScenarioSpec,
     private val generator: BusinessEventGenerator,
     private val target: Target,
+    /** Hard ceiling for `until_stop_condition` durations to prevent test runaways. */
+    private val untilStopCap: Duration = Duration.ofMinutes(1),
 ) {
     fun run(): ScenarioResult {
         val rateLimiter = buildRateLimiter()
@@ -29,10 +30,8 @@ class ScenarioRunner(
         when (val d = scenario.duration) {
             is CountDurationSpec -> {
                 while (success + error < d.value) {
-                    rateLimiter.acquire()
-                    val outcome = target.write(generator.next())
+                    val outcome = doOne(rateLimiter, evaluator)
                     if (outcome.success) success++ else error++
-                    evaluator.recordOutcome(outcome.success)
                     val triggered = evaluator.shouldStop()
                     if (triggered != null) { stopReason = triggered; break }
                 }
@@ -41,20 +40,22 @@ class ScenarioRunner(
             is TimeDurationSpec -> {
                 val targetDuration = Duration.parse(d.value)
                 while (Duration.between(started, Instant.now()) < targetDuration) {
-                    rateLimiter.acquire()
-                    val outcome = this.target.write(generator.next())
+                    val outcome = doOne(rateLimiter, evaluator)
                     if (outcome.success) success++ else error++
-                    evaluator.recordOutcome(outcome.success)
                     val triggered = evaluator.shouldStop()
                     if (triggered != null) { stopReason = triggered; break }
                 }
                 if (stopReason.isEmpty()) stopReason = "time elapsed"
             }
-            is UntilStopDurationSpec -> throw MisconfigurationException(
-                "Duration kind 'until_stop_condition' is designed but not implemented in this build. " +
-                "Plan 5 will wire latency-based stop conditions that this depends on. " +
-                "Use 'time' or 'count' for now."
-            )
+            is UntilStopDurationSpec -> {
+                while (Duration.between(started, Instant.now()) < untilStopCap) {
+                    val outcome = doOne(rateLimiter, evaluator)
+                    if (outcome.success) success++ else error++
+                    val triggered = evaluator.shouldStop()
+                    if (triggered != null) { stopReason = triggered; break }
+                }
+                if (stopReason.isEmpty()) stopReason = "until_stop_condition cap reached"
+            }
         }
 
         val wall = Duration.between(started, Instant.now())
@@ -70,15 +71,26 @@ class ScenarioRunner(
         )
     }
 
+    private data class OneOutcome(val success: Boolean)
+
+    private fun doOne(rateLimiter: RateLimiter, evaluator: StopConditionEvaluator): OneOutcome {
+        rateLimiter.acquire()
+        val t0 = System.nanoTime()
+        val outcome = target.write(generator.next())
+        val latencyNanos = System.nanoTime() - t0
+        evaluator.recordOutcome(success = outcome.success, latencyNanos = latencyNanos)
+        return OneOutcome(success = outcome.success)
+    }
+
     private fun buildRateLimiter(): RateLimiter = when (val r = scenario.rate) {
         is ConstantRateSpec -> ConstantRateLimiter(r.opsPerSecond)
-        is RampedRateSpec -> throw MisconfigurationException(
-            "Rate kind 'ramped' is designed but not implemented in this build. " +
-            "Plan 5 will wire ramped rate. Use 'constant' for now."
+        is RampedRateSpec -> RampedRateLimiter(
+            fromOpsPerSecond = r.from,
+            toOpsPerSecond = r.to,
+            rampDuration = Duration.parse(r.over),
         )
-        is SteppedRateSpec -> throw MisconfigurationException(
-            "Rate kind 'stepped' is designed but not implemented in this build. " +
-            "Plan 5 will wire stepped rate. Use 'constant' for now."
+        is SteppedRateSpec -> SteppedRateLimiter(
+            steps = r.steps.map { StepConfig(rate = it.rate, hold = Duration.parse(it.hold)) },
         )
     }
 }

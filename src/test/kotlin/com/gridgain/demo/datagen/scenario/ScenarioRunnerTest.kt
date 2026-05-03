@@ -4,19 +4,16 @@ import com.gridgain.demo.datagen.config.ColumnSpec
 import com.gridgain.demo.datagen.config.ConstantRateSpec
 import com.gridgain.demo.datagen.config.CountDurationSpec
 import com.gridgain.demo.datagen.config.DataConfig
-import com.gridgain.demo.datagen.config.RampedRateSpec
 import com.gridgain.demo.datagen.config.SchemaSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.TimeDurationSpec
 import com.gridgain.demo.datagen.config.TransactionScope
-import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.target.InMemoryTarget
 import net.datafaker.Faker
 import org.assertj.core.api.Assertions.assertThat
-import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.Test
@@ -68,21 +65,5 @@ class ScenarioRunnerTest {
         assertThat(result.wallTime.toMillis()).isBetween(180L, 600L)
         assertThat(result.successCount).isBetween(15L, 35L)
         assertThat(result.stopReason).isEqualTo("time elapsed")
-    }
-
-    @Test
-    fun `unsupported rate kind is rejected`(@TempDir dir: Path) {
-        val scenario = ScenarioSpec(
-            name = "ramped",
-            rootSchemas = listOf("customer"),
-            rate = RampedRateSpec(from = 1.0, to = 100.0, over = "PT1S"),
-            duration = CountDurationSpec(value = 5),
-            transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
-        )
-        assertThatThrownBy { runner(dir, scenario).run() }
-            .isInstanceOf(MisconfigurationException::class.java)
-            .hasMessageContaining("ramped")
-            .hasMessageContaining("Plan 5")
     }
 }
