@@ -51,7 +51,7 @@ subprojects {
         publications {
             create<MavenPublication>("maven") {
                 from(components["java"])
-                artifactId = "gridgain-${project.name}"
+                artifactId = "gridgain-demo-${project.name}"
             }
         }
         repositories {
