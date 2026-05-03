@@ -3,15 +3,18 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after F5 — explicit BusinessEvent.parentSchemaName)
+Last updated: 2026-05-03 (after Plan 9 — provisioning emit + apply)
 
 ---
 
 ## Current State
 
-Plans 1–8 + Plan 7.5 (subproject split) implemented. **148 tests pass** across
-three subprojects: `data-generator-core` (142 unit), `data-generator-gg8` (3
-env-gated GG8 integration), `data-generator-gg9` (3 env-gated GG9 integration).
+Plans 1–9 implemented. **169 tests pass** across three subprojects:
+`data-generator-core` (~158 unit), `data-generator-gg8` (env-gated KV +
+provisioner integration), `data-generator-gg9` (env-gated KV + provisioner
+integration). After Plan 9 every scenario carries `provisioning: skip|emit|apply`;
+the data generator can render GG8 cache XML, GG9 SQL DDL, and create absent
+caches/tables idempotently. The `affinity: true` annotation is finally consumed.
 The data generator can:
 
 - Parse and migrate two yaml configs (`data.yaml` + `ops.yaml`) via the five-stage
@@ -77,17 +80,6 @@ Either add a validator rejecting multi-FK-to-same-parent, or document the
 first-wins semantics explicitly.
 
 
-### F6 — TRANSACTIONAL cache provisioning for `transaction_scope: business_event`
-*Source: Plan 6 Gg8KvTarget integration discussion.*
-GG8 8.9+ rejects atomic-cache operations inside transactions. When a scenario
-opts into `transaction_scope: business_event`, every target cache must be
-configured `CacheAtomicityMode.TRANSACTIONAL`. Today `Gg8KvTarget.putRow` calls
-`getOrCreateCache(name)` which defaults to ATOMIC. Either: (a) build a
-`ClientCacheConfiguration` with TRANSACTIONAL mode in `putRow`, OR (b) wait
-for Plan 9 (provisioning emit/apply) to create caches with the right mode and
-just document the requirement here. Path (b) is preferable — it keeps the
-target dumb and pushes the cache-shape decision to the provisioning layer.
-
 ### F7 — `ScenarioTargetValidator` softness when `ops.targets` empty
 *Source: Plan 6 final review.*
 The validator unconditionally rejects `target = ""` for every scenario. Today
@@ -95,6 +87,16 @@ this is fine because tests with scenarios always set targets explicitly. As
 Plan 7 adds `Gg9KvTargetSpec` and we get more test fixtures, a fragility bug
 might surface. Decision needed: keep strict (current) or short-circuit when
 `ops.targets` is empty?
+
+### F10 — Provisioning SqlType inference's coarse defaults
+*Source: Plan 9 review.*
+`ProvisioningPlanFactory.inferType` maps every non-`SequenceSpec` value source
+to `SqlType.VARCHAR`, including `WeightedChoiceSpec` whose choices may be
+numeric. `Gg9SqlDdlRenderer` widens VARCHAR to `VARCHAR(256)`. Both are safe
+defaults but a future plan should:
+(a) infer from the runtime type of `WeightedChoiceSpec.choices[0].value`,
+(b) parameterize VARCHAR length per column,
+(c) extend `SqlType` to cover timestamp / decimal / numeric.
 
 ---
 
@@ -121,7 +123,25 @@ classpath, the FQN ambiguity disappears at the build-tool level.
 Plan 7.5 Task 5; `client.tables()` and `client.transactions()` now resolve
 directly against GG9's `IgniteClient`.
 
+### F6 — TRANSACTIONAL cache provisioning ✅ *(closed by Plan 9)*
+Plan 9 Task 8 sets `CacheAtomicityMode.TRANSACTIONAL` on caches whose
+descriptors carry `transactional = true` (driven by `transaction_scope:
+business_event`). `Gg8KvTarget.putRow` keeps using `getOrCreateCache(name)`
+because the cache now exists with the right mode — provisioning owns the
+cache-shape decision.
+
 ---
+
+## Plan 9 — Provisioning Emit + Apply *(complete)*
+
+Per spec §4. Adds per-scenario `provisioning: skip|emit|apply`. `emit`
+writes GG8 cache XML to `<outputDir>/data-generator/provisioning/gg8/` and
+GG9 SQL DDL to `.../provisioning/gg9/`. `apply` creates absent
+caches/tables on the cluster idempotently. The `affinity: true` annotation
+is finally consumed (GG8 `keyConfiguration`; GG9 `COLOCATE BY`). Closes
+F6 (TRANSACTIONAL cache mode); opens F10 (SqlType inference refinement).
+
+All 15 tasks done — see `plans/2026-05-03-data-generator-plan-9-provisioning.md`.
 
 ## Plan 8 — Plugin Invocation *(complete)*
 
