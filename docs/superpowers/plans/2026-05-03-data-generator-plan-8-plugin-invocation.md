@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the data generator runnable from inside `gridgain-demo-gradle-plugin` so demo flows look like `./gradlew :TaxiDemo:dataGenerate -Pscenario=<name>`. The plugin already deploys the cluster and writes `client-endpoints.yaml`; this plan wires the data generator as a downstream action that reuses the plugin's context (config file path, output directory, cluster endpoints) without the user touching env vars.
+**Goal:** Make the data generator runnable from inside `gridgain-demo-gradle-plugin` so demo flows look like `cd TaxiDemo && ./gradlew dataGenerate --scenario <name>`. The plugin already deploys the cluster and writes `client-endpoints.yaml`; this plan wires the data generator as a downstream action that reuses the plugin's context (config file path, output directory, cluster endpoints) without the user touching env vars.
 
 **Architecture:** Add `maven-publish` to the data-generator and publish to maven local. The plugin pulls in `com.gridgain.demo:gridgain-demo-data-generator:0.0.1-SNAPSHOT` and exposes a `dataGenerate` task. **Critical classpath note:** the plugin currently depends on `org.gridgain:ignite-core:9.1.3` (GG9), and the data-generator pulls in `org.gridgain:ignite-core:8.9.18` (GG8) for `Gg8KvTarget`. Same artifact, different major versions, same packages — they will conflict on a single classpath. Plan 8 resolves this by running the data generator in a forked JVM with its own classpath (same approach `gg8-client-finder`'s `TestClientV8` documents in its build.gradle.kts comment). The plugin task assembles the fork's classpath from the data-generator's published artifacts + ignite-core 8.9.18, runs `java -cp ... com.gridgain.demo.datagen.cli.Main <args>`, and reports the exit code + parsed result.yaml back into the plugin's run log.
 
@@ -24,9 +24,10 @@
 
 ## Plugin invocation shape (target user experience)
 
-From the workspace root:
+From inside TaxiDemo (its own gradle project — there is no top-level build that aggregates the siblings):
 ```
-./gradlew :TaxiDemo:dataGenerate -Pscenario=customer-load
+cd TaxiDemo
+./gradlew dataGenerate --scenario customer-load
 ```
 
 The plugin task:
@@ -560,7 +561,7 @@ demoOutputDirectory=build/gridgain/output
 - [ ] **Step 3: Run the task**
 
 ```bash
-./gradlew :TaxiDemo:dataGenerate -Pscenario=customer-load --info
+cd TaxiDemo && ./gradlew dataGenerate --scenario customer-load --info
 ```
 
 Expected: success. `TaxiDemo/build/gridgain/output/data-generator/runs/<run-id>/result.yaml` should contain:
@@ -593,11 +594,17 @@ Add a subsection after the existing "Plugin invocation" paragraph:
 
 ```markdown
 ### Concrete invocation
-After running `./gradlew :gridgain-demo-data-generator:publishToMavenLocal` once
-(re-run after every data-generator code change), the generator is invokable from
-the plugin via:
+After running `cd gridgain-demo-data-generator && ./gradlew publishToMavenLocal`
+once (re-run after every data-generator code change), the generator is invokable
+from the plugin via:
 
-    ./gradlew :TaxiDemo:dataGenerate -Pscenario=<name>
+    cd TaxiDemo
+    ./gradlew dataGenerate --scenario <name>
+
+(There is no top-level multi-project gradle build at the workspace root; each
+sibling — TaxiDemo, the plugin, the data-generator — is its own project. TaxiDemo
+`includeBuild`s the plugin so plugin code changes are picked up without
+publishing.)
 
 The plugin task forks a JVM with the data-generator's classpath, passes the
 plugin's existing demoConfigFile / demoOutputDirectory paths through, and writes
@@ -622,7 +629,7 @@ git commit -m "docs(datagen): document plugin invocation workflow"
 ## Verification
 
 After Plan 8 lands:
-- `./gradlew :TaxiDemo:dataGenerate -Pscenario=customer-load` runs end-to-end and
+- `cd TaxiDemo && ./gradlew dataGenerate --scenario customer-load` runs end-to-end and
   produces a result.yaml.
 - Maven-local publish workflow documented and routine.
 - Forked-JVM classpath strategy documented, sidestepping the GG8/GG9 ignite-core
@@ -654,7 +661,7 @@ After Plan 8 lands:
    cache provisioning needs to create caches in `TRANSACTIONAL` mode. Today the
    data-generator silently uses ATOMIC defaults; Plan 9 handles this. For Plan 8,
    keep all smoke scenarios at `transaction_scope: none` (the default).
-2. **Forking overhead**: each `:TaxiDemo:dataGenerate` invocation spawns a JVM,
+2. **Forking overhead**: each `dataGenerate` invocation spawns a JVM,
    parses configs, opens a thin client. Acceptable for demo-sized work (single
    scenario per invocation). If we ever want to batch many scenarios, revisit.
 3. **`@get:Input` on a `var String` property**: Gradle's task properties API

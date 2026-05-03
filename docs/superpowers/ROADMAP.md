@@ -108,7 +108,7 @@ size as Plan 6.
 
 ### Plan 8 — Plugin Invocation *(near-term priority)*
 Make the data generator runnable from inside the gradle plugin, so demo flows
-look like `./gradlew :TaxiDemo:dataGenerate`. Sub-pieces:
+look like `cd TaxiDemo && ./gradlew dataGenerate`. Sub-pieces:
 
 1. Add `maven-publish` to `gridgain-demo-data-generator/build.gradle.kts`;
    verify `publishToMavenLocal` produces a usable jar.
@@ -165,7 +165,7 @@ DATAGEN_GG8_CLUSTER_NAME=… DATAGEN_GG8_TEST_CACHE=… \
 ### Plugin-driven (target after Plan 8)
 ```
 cd .                                                              # workspace root
-./gradlew :TaxiDemo:dataGenerate -Pscenario=customer-load        # runs via plugin
+cd TaxiDemo && ./gradlew dataGenerate --scenario customer-load   # runs via plugin
 ```
 
 The plugin reads its own `demoConfigFile` to find the cluster's
