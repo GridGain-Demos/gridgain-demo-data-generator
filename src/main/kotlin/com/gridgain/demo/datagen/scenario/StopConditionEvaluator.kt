@@ -6,22 +6,17 @@ import com.gridgain.demo.datagen.config.LatencyP99StopSpec
 import com.gridgain.demo.datagen.config.LatencyP999StopSpec
 import com.gridgain.demo.datagen.config.StopConditionSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
+import java.time.Duration
 
 class StopConditionEvaluator(private val conditions: List<StopConditionSpec>) {
 
     init {
         for (c in conditions) {
             when (c) {
-                is ErrorRateStopSpec -> Unit
-                is LatencyP99StopSpec, is LatencyP999StopSpec -> throw MisconfigurationException(
-                    "Stop condition kind '${if (c is LatencyP99StopSpec) "latency_p99_above" else "latency_p999_above"}' " +
-                    "is designed but not implemented in this build. " +
-                    "Plan 5 will wire latency-based stop conditions when real KV targets land. " +
-                    "Use error_rate_above for now."
-                )
+                is ErrorRateStopSpec, is LatencyP99StopSpec, is LatencyP999StopSpec -> Unit  // supported
                 is ExternalSignalStopSpec -> throw MisconfigurationException(
                     "Stop condition kind 'external_signal' is designed but not implemented in this build. " +
-                    "Plan 5 or later will wire external-signal stop conditions."
+                    "A future plan will wire external-signal stop conditions."
                 )
             }
         }
@@ -29,19 +24,39 @@ class StopConditionEvaluator(private val conditions: List<StopConditionSpec>) {
 
     private var successCount: Long = 0
     private var failureCount: Long = 0
+    private val latency: LatencyHistogram = LatencyHistogram()
 
-    fun recordOutcome(success: Boolean) {
+    fun recordOutcome(success: Boolean, latencyNanos: Long = 0L) {
         if (success) successCount++ else failureCount++
+        if (latencyNanos > 0) latency.record(latencyNanos)
     }
 
-    /** Returns a stop reason string if any condition has triggered, else null. Requires at least 100 samples. */
     fun shouldStop(): String? {
         val total = successCount + failureCount
         if (total < 100) return null
         val errorRate = failureCount.toDouble() / total
         for (c in conditions) {
-            if (c is ErrorRateStopSpec && errorRate > c.threshold) {
-                return "error_rate exceeded threshold: $errorRate > ${c.threshold}"
+            when (c) {
+                is ErrorRateStopSpec -> {
+                    if (errorRate > c.threshold) {
+                        return "error_rate exceeded threshold: $errorRate > ${c.threshold}"
+                    }
+                }
+                is LatencyP99StopSpec -> {
+                    val q = latency.quantile(0.99) ?: continue
+                    val thresholdNanos = Duration.parse(c.threshold).toNanos()
+                    if (q > thresholdNanos) {
+                        return "latency_p99 exceeded threshold: ${q}ns > ${thresholdNanos}ns"
+                    }
+                }
+                is LatencyP999StopSpec -> {
+                    val q = latency.quantile(0.999) ?: continue
+                    val thresholdNanos = Duration.parse(c.threshold).toNanos()
+                    if (q > thresholdNanos) {
+                        return "latency_p999 exceeded threshold: ${q}ns > ${thresholdNanos}ns"
+                    }
+                }
+                is ExternalSignalStopSpec -> Unit  // never reached; rejected at construction
             }
         }
         return null

@@ -2,7 +2,6 @@ package com.gridgain.demo.datagen.scenario
 
 import com.gridgain.demo.datagen.config.ErrorRateStopSpec
 import com.gridgain.demo.datagen.config.ExternalSignalStopSpec
-import com.gridgain.demo.datagen.config.LatencyP99StopSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -29,11 +28,6 @@ class StopConditionEvaluatorTest {
 
     @Test
     fun `unsupported stop condition kind is rejected at construction`() {
-        assertThatThrownBy { StopConditionEvaluator(listOf(LatencyP99StopSpec("PT0.1S"))) }
-            .isInstanceOf(MisconfigurationException::class.java)
-            .hasMessageContaining("latency_p99_above")
-            .hasMessageContaining("Plan 5")
-
         assertThatThrownBy { StopConditionEvaluator(listOf(ExternalSignalStopSpec())) }
             .isInstanceOf(MisconfigurationException::class.java)
             .hasMessageContaining("external_signal")
