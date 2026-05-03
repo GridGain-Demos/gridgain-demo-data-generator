@@ -3,14 +3,16 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after Plan 7 GG9 KV target landed)
+Last updated: 2026-05-03 (after Plan 7.5 subproject split landed)
 
 ---
 
 ## Current State
 
-Plans 1–8 implemented. **148 tests pass** from a clean build (142 unit + 6
-env-gated integration tests against GG8/GG9 clusters). The data generator can:
+Plans 1–8 + Plan 7.5 (subproject split) implemented. **148 tests pass** across
+three subprojects: `data-generator-core` (142 unit), `data-generator-gg8` (3
+env-gated GG8 integration), `data-generator-gg9` (3 env-gated GG9 integration).
+The data generator can:
 
 - Parse and migrate two yaml configs (`data.yaml` + `ops.yaml`) via the five-stage
   pipeline (read → migrate → JSONSchema → cross-element → deserialize).
@@ -28,11 +30,16 @@ env-gated integration tests against GG8/GG9 clusters). The data generator can:
   transaction wrapping when `transaction_scope: business_event`).
 - Write to a real GG9 cluster via `Gg9KvTarget` (lazy `IgniteClient`,
   `KeyValueView<Tuple, Tuple>`, optional transaction wrapping when
-  `transaction_scope: business_event`). Smoke against a live GG9 cluster
-  pending — see follow-up F8.
+  `transaction_scope: business_event`).
+
+Plugin's `DataGenerateTask` dispatches the fork's classpath + main class per
+the resolved target's kind: `gg8-kv` → `dataGeneratorGg8Runtime` + `Gg8Main`;
+`gg9-kv` → `dataGeneratorGg9Runtime` + `Gg9Main`.
 
 GG8 path verified end-to-end against the live `taxi-demo-gcp-8a` cluster
-via the plugin (Plan 8).
+via the plugin (Plan 8 + re-verified after Plan 7.5):
+`success_count: 200, error_count: 0, achieved_rate: ~8.1 ops/s,
+stop_reason: count reached`.
 
 ---
 
@@ -95,26 +102,23 @@ Plan 7 adds `Gg9KvTargetSpec` and we get more test fixtures, a fragility bug
 might surface. Decision needed: keep strict (current) or short-circuit when
 `ops.targets` is empty?
 
-### F8 — Plugin `DataGenerateTask` classpath split for GG8 vs GG9
-*Source: Plan 7 build wiring.*
-`DataGenerateTask` (Plan 8) bundles `ignite-core:8.9.18` into the forked JVM
-unconditionally. With Plan 7 landed, the task must inspect the resolved
-target's `kind` and add `ignite-core:8.9.18` (gg8-kv) OR `ignite-client:9.1.3`
-(gg9-kv) — never both. Until F8 lands, GG9 scenarios driven by the plugin
-will fail at fork classpath assembly time. The CLI can be invoked directly
-with the right jars in the meantime.
+---
 
-### F9 — Eliminate reflection workaround in `Gg9KvTarget`
-*Source: Plan 7 Task 6 implementation.*
-GG8's `ignite-core` and GG9's `ignite-api` both define
-`org.apache.ignite.client.IgniteClient` and `org.apache.ignite.Ignite` with
-the same FQN. The Kotlin compiler resolves `client.tables()` and
-`client.transactions()` against GG8's `Ignite` (no such methods). Workaround:
-private `gg9Tables()` and `gg9Transactions()` helpers in `Gg9KvTarget` use
-`javaClass.getMethod(name).invoke(client)` to bypass the ambiguous superinterface
-and cast to GG9-only types. Proper structural fix: separate source sets per
-client version, or move GG8 to its own subproject, or per-version wrapper in
-`gg9-client-finder`. Closes naturally if F8 splits classpaths at build time.
+## Closed Follow-ups
+
+### F8 — Plugin `DataGenerateTask` classpath split for GG8 vs GG9 ✅ *(closed by Plan 7.5)*
+Plan 7.5 split the data-generator into three subprojects (`-core`, `-gg8`,
+`-gg9`). The plugin now declares two configurations
+(`dataGeneratorGg8Runtime`, `dataGeneratorGg9Runtime`), pre-parses ops.yaml
+to learn the resolved target's kind, and dispatches the fork classpath +
+main class accordingly.
+
+### F9 — Eliminate reflection workaround in `Gg9KvTarget` ✅ *(closed by Plan 7.5)*
+With GG8's `ignite-core` no longer on the `data-generator-gg9` module's
+classpath, the FQN ambiguity disappears at the build-tool level.
+`gg9Tables()` and `gg9Transactions()` reflection helpers were removed in
+Plan 7.5 Task 5; `client.tables()` and `client.transactions()` now resolve
+directly against GG9's `IgniteClient`.
 
 ---
 
@@ -133,17 +137,40 @@ Two late fixes that landed during smoke:
   `@get:Option` to `@set:Option` — Gradle 9 only treats annotated methods that
   take a parameter as value-options.
 
+## Plan 7.5 — Subproject Split *(complete)*
+
+The data-generator is now a multi-project gradle build mirroring
+`gridgain-demo-client-utils`:
+
+- `data-generator-core` — GG-agnostic engine (config, generators, scenario,
+  `Target` interface, `InMemoryTarget`, CLI plumbing). No `ignite-*` deps.
+- `data-generator-gg8` — `Gg8KvTarget` + `Gg8Main`. Depends on core +
+  `gg8-client-finder` + `ignite-core:8.9.18`.
+- `data-generator-gg9` — `Gg9KvTarget` + `Gg9Main`. Depends on core +
+  `gg9-client-finder` + `ignite-client:9.1.3`.
+
+Maven coordinates after split:
+- `com.gridgain.demo:gridgain-demo-data-generator-core:0.0.1-SNAPSHOT`
+- `com.gridgain.demo:gridgain-demo-data-generator-gg8:0.0.1-SNAPSHOT`
+- `com.gridgain.demo:gridgain-demo-data-generator-gg9:0.0.1-SNAPSHOT`
+
+Closes F8 (plugin per-target classpath dispatch) and F9 (reflection workaround
+in `Gg9KvTarget` removed because GG8's `ignite-core` is no longer on its
+compile classpath). All 11 tasks done — see
+`plans/2026-05-03-data-generator-subproject-split.md`.
+
 ## Plan 7 — GG9 KV Target *(complete)*
 
-`Gg9KvTarget` lives at `src/main/kotlin/com/gridgain/demo/datagen/target/Gg9KvTarget.kt`.
+`Gg9KvTarget` lives at `data-generator-gg9/src/main/kotlin/com/gridgain/demo/datagen/target/Gg9KvTarget.kt`.
 Lazy `IgniteClient` via `gg9-client-finder.DemoAddressFinder`; KV access through
 `KeyValueView<Tuple, Tuple>`; optional `business_event` transaction wrapping via
-`runInTransaction { tx -> ... }`. CLI dispatches on `is Gg9KvTargetSpec ->`.
-Env-gated integration tests for write + read.
+`runInTransaction { tx -> ... }`. `Gg9Main` constructs the target; the plugin
+dispatches it via `dataGeneratorGg9Runtime`. Env-gated integration tests for
+write + read.
 
 All 9 tasks done — see `plans/2026-05-03-data-generator-plan-7-gg9-kv-target.md`.
-Live-cluster smoke deferred until F8 (plugin classpath split) lands so the
-plugin can drive a GG9 scenario.
+Live-cluster GG9 smoke is now unblocked (Plan 7.5 closed F8); pending operator
+bring-up of a GG9 cluster.
 
 ## Remaining Plans (not yet drafted)
 
