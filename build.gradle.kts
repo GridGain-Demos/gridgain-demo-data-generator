@@ -30,10 +30,22 @@ dependencies {
     implementation("com.gridgain.demo:gg8-client-finder:0.0.5-SNAPSHOT")
     implementation("org.gridgain:ignite-core:8.9.18")
 
+    // Plan 7 — GG9 KV target
+    // gg9-client-finder declares ignite-client as compileOnly; we mirror that here so
+    // GG8's ignite-core (8.9.18) and GG9's ignite-client (9.1.3) never end up on the
+    // SAME runtime classpath (their org.apache.ignite.* packages overlap incompatibly).
+    // The CLI / plugin chooses which client jar to add at scenario-run time based on
+    // the resolved target kind. See Plan 7 Option E and follow-up F8.
+    implementation("com.gridgain.demo:gg9-client-finder:0.0.5-SNAPSHOT")
+    compileOnly("org.gridgain:ignite-client:9.1.3")
+
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation("org.assertj:assertj-core:3.25.3")
     testImplementation("org.slf4j:slf4j-simple:2.0.13")
     testImplementation(kotlin("test"))
+
+    // Plan 7 — env-gated GG9 integration tests need the GG9 client at test runtime.
+    testImplementation("org.gridgain:ignite-client:9.1.3")
 }
 
 configurations.all {
