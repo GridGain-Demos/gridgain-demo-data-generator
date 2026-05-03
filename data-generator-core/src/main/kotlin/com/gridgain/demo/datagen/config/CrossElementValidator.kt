@@ -139,6 +139,22 @@ class ScenarioRootSchemaValidator : CrossElementValidator {
     }
 }
 
+class AffinityColumnValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        for (schema in data.schemas) {
+            val affs = schema.columns.filter { it.affinity }
+            if (affs.size > 1) {
+                errors += "schema '${schema.name}' has more than one affinity column " +
+                    "(${affs.joinToString(", ") { it.name }}). " +
+                    "Mark exactly one column with 'affinity: true' (or none) — multiple " +
+                    "affinity columns have undefined colocation semantics."
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}
+
 class KeyColumnValidator : CrossElementValidator {
     override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
         val errors = mutableListOf<String>()

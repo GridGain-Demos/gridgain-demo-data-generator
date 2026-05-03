@@ -22,6 +22,7 @@ class ConfigurationParser(
             ScenarioRootSchemaValidator(),
             ScenarioTargetValidator(),
             KeyColumnValidator(),
+            AffinityColumnValidator(),
         )
     ),
 ) {
