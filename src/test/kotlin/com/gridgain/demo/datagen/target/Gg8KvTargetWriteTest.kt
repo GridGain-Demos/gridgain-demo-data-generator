@@ -19,7 +19,10 @@ class Gg8KvTargetWriteTest {
             }
             val event = BusinessEvent(parentRow = parent, childrenBySchema = emptyMap())
             val outcome = target.write(event)
-            assertThat(outcome.success).isTrue()
+            if (!outcome.success) outcome.error?.printStackTrace()
+            assertThat(outcome.success)
+                .withFailMessage { "write failed: ${outcome.error?.message ?: "no error captured"}" }
+                .isTrue()
         }
     }
 }

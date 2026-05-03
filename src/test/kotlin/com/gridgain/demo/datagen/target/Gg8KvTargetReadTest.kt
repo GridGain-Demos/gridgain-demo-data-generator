@@ -16,9 +16,13 @@ class Gg8KvTargetReadTest {
         Gg8KvTarget(clusterName, keyColumnByName = mapOf(cacheName to "id")).use { target ->
             val key = 2002L
             val parent = LinkedHashMap<String, Any?>().apply { put("id", key); put("note", "hello") }
-            target.write(BusinessEvent(parentRow = parent, childrenBySchema = emptyMap()))
+            val writeOutcome = target.write(BusinessEvent(parentRow = parent, childrenBySchema = emptyMap()))
+            if (!writeOutcome.success) writeOutcome.error?.printStackTrace()
             val outcome = target.read(cacheName, key)
-            assertThat(outcome.success).isTrue()
+            if (!outcome.success) outcome.error?.printStackTrace()
+            assertThat(outcome.success)
+                .withFailMessage { "read failed: ${outcome.error?.message ?: "no error captured"}" }
+                .isTrue()
             assertThat(outcome.value).isNotNull
         }
     }
@@ -27,7 +31,10 @@ class Gg8KvTargetReadTest {
     fun `read returns success-with-null for absent key`() {
         Gg8KvTarget(clusterName, keyColumnByName = mapOf(cacheName to "id")).use { target ->
             val outcome = target.read(cacheName, key = -999_999L)
-            assertThat(outcome.success).isTrue()
+            if (!outcome.success) outcome.error?.printStackTrace()
+            assertThat(outcome.success)
+                .withFailMessage { "read failed: ${outcome.error?.message ?: "no error captured"}" }
+                .isTrue()
             assertThat(outcome.value).isNull()
         }
     }
