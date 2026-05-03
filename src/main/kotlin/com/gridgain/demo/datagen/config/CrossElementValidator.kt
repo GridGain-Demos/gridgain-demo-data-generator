@@ -156,3 +156,40 @@ class KeyColumnValidator : CrossElementValidator {
         return CrossElementValidationResult(errors = errors, warnings = emptyList())
     }
 }
+
+class ScenarioTargetValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        val targetsByName = ops.targets.associateBy { it.name }
+        for (scenario in ops.scenarios) {
+            if (scenario.target.isBlank()) {
+                errors += "scenario '${scenario.name}' has no target. " +
+                    "Add a 'target: <name>' field referencing one of the targets declared in ops.yaml."
+                continue
+            }
+            val target = targetsByName[scenario.target]
+            if (target == null) {
+                errors += "scenario '${scenario.name}' references target '${scenario.target}' " +
+                    "which is not declared in ops.yaml. " +
+                    "Available targets: ${targetsByName.keys.joinToString(", ").ifBlank { "(none)" }}."
+                continue
+            }
+            val (supportsReads, supportsTransactions) = capabilitiesFor(target)
+            if (scenario.readRatio > 0.0 && !supportsReads) {
+                errors += "scenario '${scenario.name}' has read_ratio ${scenario.readRatio} " +
+                    "but target '${scenario.target}' does not support reads. " +
+                    "Set read_ratio to 0.0 or use a target that supports reads."
+            }
+            if (scenario.transactionScope == TransactionScope.BUSINESS_EVENT && !supportsTransactions) {
+                errors += "scenario '${scenario.name}' has transaction_scope: business_event " +
+                    "but target '${scenario.target}' does not support transactions. " +
+                    "Set transaction_scope to 'none' or use a target that supports transactions."
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+
+    private fun capabilitiesFor(target: TargetSpec): Pair<Boolean, Boolean> = when (target) {
+        is Gg8KvTargetSpec -> true to true
+    }
+}
