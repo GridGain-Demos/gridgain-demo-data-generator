@@ -13,7 +13,7 @@
   "$defs": {
     "scenario": {
       "type": "object",
-      "required": ["name", "root_schemas", "rate", "duration", "transaction_scope", "read_ratio"],
+      "required": ["name", "root_schemas", "rate", "duration", "read_ratio"],
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },

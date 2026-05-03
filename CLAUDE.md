@@ -76,11 +76,15 @@ scenarios are deferred.
 - **Stop conditions.** Optional list, ORed: `latency_p99_above`,
   `latency_p999_above`, `error_rate_above`, `external_signal`. A triggered stop
   is recorded as the scenario outcome, not a crash.
-- **Transactional scope** (per scenario, KV mode):
-    - `business_event` *(default)* — one transaction wraps a single root-schema
-      emission together with all transitive children produced by `parent-fk-ref`
-      relations and cohort buckets. The whole subtree is the business event.
-    - `none` — no transaction wrapping; each `put()` standalone.
+- **Transactional scope** (per scenario, KV mode). Optional field — omitted
+  scenarios get `none`:
+    - `none` *(default)* — no transaction wrapping; each `put()` standalone.
+      Works against ATOMIC-mode caches (the GG8 default) without configuration.
+    - `business_event` — one transaction wraps a single root-schema emission
+      together with all transitive children produced by `parent-fk-ref` relations
+      and cohort buckets. The whole subtree is the business event. Requires every
+      target cache to be configured `CacheAtomicityMode.TRANSACTIONAL` (GG8 8.9+
+      rejects atomic-cache operations inside transactions).
     - SQL-mode transaction semantics are designed but deferred; the
       insert/update/upsert distinction is preserved at the operation layer.
 - **Colocation alignment.** When `transaction_scope: business_event` is paired

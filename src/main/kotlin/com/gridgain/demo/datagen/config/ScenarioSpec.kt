@@ -4,6 +4,15 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
 
+/**
+ * NOTE: `transactionScope` defaults to `NONE` in violation of the workspace project rule
+ * "no defaults on template classes". Intentional: the framework treats transactions as opt-in.
+ * Most demos run against ATOMIC caches and don't need (or want) transaction wrapping.
+ * Scenarios that need a single tx around the parent + child puts of a business event
+ * opt in with `transaction_scope: business_event`. This default mirrors how the workspace
+ * uses caches today and keeps the simplest first-run experience working without forcing
+ * users to spell out `none` in every scenario.
+ */
 data class ScenarioSpec(
     val name: String,
     val target: String = "",   // back-compat default; ScenarioTargetValidator (Plan 6 Task 5) enforces non-empty
@@ -11,7 +20,7 @@ data class ScenarioSpec(
     val rate: RateSpec,
     val duration: DurationSpec,
     @JsonProperty("stop_conditions") val stopConditions: List<StopConditionSpec> = emptyList(),
-    @JsonProperty("transaction_scope") val transactionScope: TransactionScope,
+    @JsonProperty("transaction_scope") val transactionScope: TransactionScope = TransactionScope.NONE,
     @JsonProperty("read_ratio") val readRatio: Double,
 )
 
