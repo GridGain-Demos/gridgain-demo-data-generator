@@ -3,16 +3,18 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after Plan 9 — provisioning emit + apply)
+Last updated: 2026-05-03 (after F1 + F2 + F3 cleanup pass)
 
 ---
 
 ## Current State
 
-Plans 1–9 implemented. **169 tests pass** across three subprojects:
-`data-generator-core` (~158 unit), `data-generator-gg8` (env-gated KV +
-provisioner integration), `data-generator-gg9` (env-gated KV + provisioner
-integration). After Plan 9 every scenario carries `provisioning: skip|emit|apply`;
+Plans 1–9 implemented. **170 tests pass** (162 unit + 8 env-gated integration)
+across three subprojects: `data-generator-core` (config, generators,
+scenario, output, provisioning plan factory), `data-generator-gg8`
+(`Gg8KvTarget` + `Gg8XmlProvisioner` with env-gated integration tests),
+`data-generator-gg9` (`Gg9KvTarget` + `Gg9SqlProvisioner` with env-gated
+integration tests). After Plan 9 every scenario carries `provisioning: skip|emit|apply`;
 the data generator can render GG8 cache XML, GG9 SQL DDL, and create absent
 caches/tables idempotently. The `affinity: true` annotation is finally consumed.
 The data generator can:
@@ -50,27 +52,6 @@ stop_reason: count reached`.
 
 These are tracked work items, not full plans. Each is small and can be picked
 up in any order.
-
-### F1 — `OutputLayout.ensureBaseDirectories` is-directory guard
-*Source: Plan 1 final review.*
-`Files.createDirectories` succeeds silently when a regular file (not a
-directory) sits at the expected path, leading to cryptic downstream errors.
-Add an explicit check that throws `CorruptedStateException` with remediation.
-Address before Plan 10 (state persistence) starts writing to `stateFile`.
-
-### F2 — `WeightedChoice` cumulative-picker boundary
-*Source: Plan 2 final review.*
-`cumulative.first { r < it.first }` would throw `NoSuchElementException` if
-`Random.nextDouble()` ever reached `totalWeight`. The JDK contract guarantees
-`[0.0, 1.0)`, so it can't happen today, but the code's correctness depends on
-that contract. Replace with `firstOrNull { r < it.first } ?: cumulative.last()`.
-
-### F3 — `YamlBackedValueSource` seed correlation
-*Source: Plan 3 final review.*
-`ValueSourceFactory` passes `Random(seed)` to `YamlBackedValueSource`, so two
-yaml-backed columns in the same schema draw identical sequences.
-`KeySuffixValueSource` uses `Random(seed + spec.baseColumn.hashCode())` —
-apply the same pattern to yaml-backed.
 
 ### F4 — `BusinessEventGenerator` multi-FK silent first-wins
 *Source: Plan 3 final review.*
@@ -129,6 +110,24 @@ descriptors carry `transactional = true` (driven by `transaction_scope:
 business_event`). `Gg8KvTarget.putRow` keeps using `getOrCreateCache(name)`
 because the cache now exists with the right mode — provisioning owns the
 cache-shape decision.
+
+### F1 — `OutputLayout.ensureBaseDirectories` is-directory guard ✅ *(closed 2026-05-03)*
+`ensureDir` checks for a regular file at the target path before
+`Files.createDirectories` and throws `CorruptedStateException` with
+remediation. Also catches the silent-success case after the call. Plan 10
+(state persistence) can now rely on `stateFile`'s parent.
+
+### F2 — `WeightedChoice` cumulative-picker boundary ✅ *(closed 2026-05-03)*
+`cumulative.first { r < it.first }` replaced with
+`cumulative.firstOrNull { r < it.first } ?: cumulative.last()`. Boundary
+graceful even if a misbehaving `Random` reaches `totalWeight`.
+
+### F3 — `YamlBackedValueSource` seed correlation ✅ *(closed 2026-05-03)*
+`ValueSourceFactory.buildCore` now takes the full `ColumnSpec` and seeds
+`YamlBackedValueSource` with `Random(seed + column.name.hashCode())`,
+mirroring `KeySuffixValueSource`. Two yaml-backed columns in the same
+schema no longer draw identical sequences. `WeightedChoiceValueSource`
+got the same per-column decorrelation as a defensive bonus.
 
 ---
 
