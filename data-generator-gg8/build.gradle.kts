@@ -1,11 +1,11 @@
-// data-generator-gg8 — GG8-flavored runtime. ignite-core 8.9.18 + gg8-client-finder 0.0.5-SNAPSHOT. No GG9 deps.
+// data-generator-gg8 — GG8-flavored runtime. ignite-core 8.9.18 + gg8-client-finder 0.5.0-SNAPSHOT. No GG9 deps.
 plugins {
     `java-library`
 }
 
 dependencies {
     api(project(":data-generator-core"))
-    api("com.gridgain.demo:gg8-client-finder:0.0.5-SNAPSHOT")
+    api("com.gridgain.demo:gg8-client-finder:0.5.0-SNAPSHOT")
     api("org.gridgain:ignite-core:8.9.18")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
