@@ -25,4 +25,5 @@ data class ColumnSpec(
     @JsonProperty("null_rate") val nullRate: Double,
     @JsonProperty("value_source") val valueSource: ValueSourceSpec,
     val affinity: Boolean = false,
+    val key: Boolean = false,
 )
