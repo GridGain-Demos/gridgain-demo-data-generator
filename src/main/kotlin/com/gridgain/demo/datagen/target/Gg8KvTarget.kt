@@ -1,5 +1,6 @@
 package com.gridgain.demo.datagen.target
 
+import com.gridgain.demo.datagen.config.TransactionScope
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.client.gg8.DemoAddressFinder
@@ -14,10 +15,15 @@ import org.apache.ignite.configuration.ClientConfiguration
  * @param clusterName must match a `clusters[].name` entry in the resolved client-endpoints.yaml
  * @param keyColumnByName maps each schema name to the name of its key column. The runner
  *     constructs this map from the parsed `DataConfig`.
+ * @param transactionScope controls whether `write()` wraps the parent + child puts in a single
+ *     GG8 transaction. Defaults to `NONE`. Set to `BUSINESS_EVENT` to opt in. Note: GG8 8.9+
+ *     rejects atomic-cache operations inside transactions, so `BUSINESS_EVENT` requires every
+ *     target cache to be configured with `CacheAtomicityMode.TRANSACTIONAL`.
  */
 class Gg8KvTarget(
     private val clusterName: String,
     private val keyColumnByName: Map<String, String>,
+    private val transactionScope: TransactionScope = TransactionScope.NONE,
 ) : Target, AutoCloseable {
 
     override val supportsReads: Boolean = true
@@ -50,28 +56,37 @@ class Gg8KvTarget(
     override fun write(event: BusinessEvent): WriteOutcome {
         return try {
             val ignite = ensureClient()
-            val tx = ignite.transactions().txStart()
-            try {
-                val parentKeyColumn = keyColumnByName.values.firstOrNull { col -> event.parentRow.containsKey(col) }
-                    ?: throw IllegalStateException(
-                        "could not resolve parent schema's key column from event; " +
-                        "event.parentRow keys=${event.parentRow.keys}, registered key columns=${keyColumnByName.values}"
-                    )
-                val parentSchemaName = keyColumnByName.entries.first { it.value == parentKeyColumn }.key
-                putRow(ignite, parentSchemaName, parentKeyColumn, event.parentRow)
-                event.childrenBySchema.forEach { (childSchema, rows) ->
-                    val childKeyColumn = keyColumnByName[childSchema]
-                        ?: throw IllegalStateException("no key column registered for schema '$childSchema'")
-                    rows.forEach { row -> putRow(ignite, childSchema, childKeyColumn, row) }
+            if (transactionScope == TransactionScope.BUSINESS_EVENT) {
+                val tx = ignite.transactions().txStart()
+                try {
+                    putAllForEvent(ignite, event)
+                    tx.commit()
+                    WriteOutcome(success = true)
+                } catch (e: Exception) {
+                    try { tx.rollback() } catch (_: Exception) { /* swallow rollback failure */ }
+                    WriteOutcome(success = false, error = e)
                 }
-                tx.commit()
+            } else {
+                putAllForEvent(ignite, event)
                 WriteOutcome(success = true)
-            } catch (e: Exception) {
-                try { tx.rollback() } catch (_: Exception) { /* swallow rollback failure */ }
-                WriteOutcome(success = false, error = e)
             }
         } catch (e: Exception) {
             WriteOutcome(success = false, error = e)
+        }
+    }
+
+    private fun putAllForEvent(ignite: IgniteClient, event: BusinessEvent) {
+        val parentKeyColumn = keyColumnByName.values.firstOrNull { col -> event.parentRow.containsKey(col) }
+            ?: throw IllegalStateException(
+                "could not resolve parent schema's key column from event; " +
+                "event.parentRow keys=${event.parentRow.keys}, registered key columns=${keyColumnByName.values}"
+            )
+        val parentSchemaName = keyColumnByName.entries.first { it.value == parentKeyColumn }.key
+        putRow(ignite, parentSchemaName, parentKeyColumn, event.parentRow)
+        event.childrenBySchema.forEach { (childSchema, rows) ->
+            val childKeyColumn = keyColumnByName[childSchema]
+                ?: throw IllegalStateException("no key column registered for schema '$childSchema'")
+            rows.forEach { row -> putRow(ignite, childSchema, childKeyColumn, row) }
         }
     }
 
