@@ -5,6 +5,7 @@ schemas:
     columns:
       - name: id
         null_rate: 0.0
+        key: true
         value_source:
           kind: sequence
           start: 1

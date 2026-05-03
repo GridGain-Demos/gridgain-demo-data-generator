@@ -138,3 +138,21 @@ class ScenarioRootSchemaValidator : CrossElementValidator {
         return CrossElementValidationResult(errors = errors, warnings = emptyList())
     }
 }
+
+class KeyColumnValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        for (schema in data.schemas) {
+            val keyColumns = schema.columns.filter { it.key }
+            when (keyColumns.size) {
+                0 -> errors += "schema '${schema.name}' has no key column. " +
+                    "Mark exactly one column with 'key: true'."
+                1 -> Unit
+                else -> errors += "schema '${schema.name}' has more than one key column " +
+                    "(${keyColumns.joinToString(", ") { it.name }}). " +
+                    "Mark exactly one column with 'key: true'."
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}

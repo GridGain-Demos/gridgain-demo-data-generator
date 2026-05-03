@@ -20,6 +20,7 @@ class ConfigurationParser(
             NullRateOnRelationColumnValidator(),
             CohortBucketSharesValidator(),
             ScenarioRootSchemaValidator(),
+            KeyColumnValidator(),
         )
     ),
 ) {

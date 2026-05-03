@@ -5,6 +5,7 @@ schemas:
     columns:
       - name: id
         null_rate: 0.0
+        key: true
         value_source: { kind: sequence, start: 1, step: 1 }
       - name: name
         null_rate: 0.0
@@ -24,6 +25,7 @@ schemas:
             - { share: 0.50, multiplier: 1 }
       - name: id
         null_rate: 0.0
+        key: true
         value_source:
           kind: key-suffix
           base_column: customer_id
