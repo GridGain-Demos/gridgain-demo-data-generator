@@ -84,7 +84,14 @@ class Gg8KvTarget(
     }
 
     override fun read(cacheName: String, key: Any): ReadOutcome {
-        TODO("Plan 6 Task 11")
+        return try {
+            val ignite = ensureClient()
+            val cache = ignite.getOrCreateCache<Any, Map<String, Any?>>(cacheName)
+            val value = cache.get(key)
+            ReadOutcome(success = true, value = value)
+        } catch (e: Exception) {
+            ReadOutcome(success = false, error = e)
+        }
     }
 
     override fun close() {
