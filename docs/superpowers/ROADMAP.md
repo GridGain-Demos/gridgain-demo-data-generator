@@ -3,13 +3,13 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-03 (after F1 + F2 + F3 cleanup pass)
+Last updated: 2026-05-04 (after Plan 10 — state persistence)
 
 ---
 
 ## Current State
 
-Plans 1–9 implemented. **170 tests pass** (162 unit + 8 env-gated integration)
+Plans 1–10 implemented. **190 tests pass** (182 unit + 8 env-gated integration)
 across three subprojects: `data-generator-core` (config, generators,
 scenario, output, provisioning plan factory), `data-generator-gg8`
 (`Gg8KvTarget` + `Gg8XmlProvisioner` with env-gated integration tests),
@@ -36,6 +36,11 @@ The data generator can:
 - Write to a real GG9 cluster via `Gg9KvTarget` (lazy `IgniteClient`,
   `KeyValueView<Tuple, Tuple>`, optional transaction wrapping when
   `transaction_scope: business_event`).
+- Persist `state.yaml` across runs (Plan 10): per-schema sequence cursors,
+  per-schema emitted-key snapshots, and the run history index. Hard-fail on
+  schema_version mismatch — no migration support, mirroring the plugin's
+  `deployment.yaml` rule. State writes are atomic via `state.yaml.tmp` →
+  `Files.move(... ATOMIC_MOVE)`.
 
 Plugin's `DataGenerateTask` dispatches the fork's classpath + main class per
 the resolved target's kind: `gg8-kv` → `dataGeneratorGg8Runtime` + `Gg8Main`;
@@ -78,6 +83,18 @@ defaults but a future plan should:
 (a) infer from the runtime type of `WeightedChoiceSpec.choices[0].value`,
 (b) parameterize VARCHAR length per column,
 (c) extend `SqlType` to cover timestamp / decimal / numeric.
+
+### F11 — `KeyRegistry` persisted-key type fidelity
+*Source: Plan 10 Task 5 design note.*
+`KeyRegistry.snapshot()` round-trips keys through `Any.toString()` for
+JSON-safety, so a `Long` key like `1L` comes back as `String("1")` after a
+restart. `KeyRegistry.sample(...)` then returns `String("1")`, which targets
+that read against a string key while the cache (or table) was keyed by
+`Long`. Today this only matters for `read_ratio > 0` after a restart; the
+write path is unaffected. Future fix: persist a `keyType` discriminator per
+schema and reverse-coerce on `restore`, OR store keys as Jackson polymorphic
+values. Spec §13 verification step 7 (restart-then-read) should add a test
+for this.
 
 ---
 
@@ -130,6 +147,33 @@ schema no longer draw identical sequences. `WeightedChoiceValueSource`
 got the same per-column decorrelation as a defensive bonus.
 
 ---
+
+## Plan 10 — State Persistence *(complete)*
+
+Per spec §6. `state.yaml` now persists per-schema sequence cursors,
+key-emission snapshots, and the run history index across `dataGenerate`
+invocations. Lives at `<demoOutputDirectory>/data-generator/state/state.yaml`.
+
+- `StatePersister.load` returns `null` on first run, throws
+  `CorruptedStateException` with remediation on `schemaVersion` mismatch
+  or corrupt yaml — no migration support, mirroring the plugin's
+  `deployment.yaml` rule.
+- `StatePersister.save` writes via `state.yaml.tmp` + `Files.move(...
+  ATOMIC_MOVE, REPLACE_EXISTING)`. Falls back to non-atomic move when the
+  filesystem rejects ATOMIC_MOVE.
+- `ScenarioRunnerCli.run` does load → seed (factory + KeyRegistry) → run
+  → snapshot → save in that order.
+
+In-process integration test (`ScenarioRunnerCliStateTest`) verifies
+sequences continue across two runs against `InMemoryTarget`: run 1 emits
+ids 1–10, run 2 picks up at 11 and ends at 21 with 20 registered keys
+and two run-history entries.
+
+Live-cluster smoke deferred — `taxi-demo-gcp-8a` was unreachable when
+attempted; the in-process test covers the persistence pipeline.
+
+All 12 tasks done — see `plans/2026-05-04-data-generator-plan-10-state-persistence.md`.
+Opens follow-up F11 (KeyRegistry persisted-key type fidelity).
 
 ## Plan 9 — Provisioning Emit + Apply *(complete)*
 
@@ -203,13 +247,6 @@ schemas; optionally applies them to the cluster. Closes follow-up F6
 here. Two artifact formats:
 - GG8 — cache `<bean>` XML with `affinityKey` and `atomicityMode`.
 - GG9 — SQL `CREATE ZONE` + `CREATE TABLE … COLOCATE BY (...)`.
-
-### Plan 10 — State Persistence
-The `KeyRegistry`, `RunId` history, and per-schema sequence positions become
-persistent across runs. Writes to `demoOutputDirectory/data-generator/state/state.yaml`
-with its own `schemaVersion` (no migration — mismatch is a hard error per the
-plugin's deployment-state pattern). Closes follow-up F1 (isDirectory guard
-becomes load-bearing here).
 
 ### Plan 11 — OpenTelemetry
 Per spec §7. Instrument the runner with OTel histograms (`data_generator.op.latency`),
