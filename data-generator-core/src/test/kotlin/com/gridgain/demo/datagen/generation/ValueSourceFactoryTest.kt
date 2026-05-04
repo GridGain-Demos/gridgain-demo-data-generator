@@ -10,6 +10,9 @@ import com.gridgain.demo.datagen.config.UniqueSpec
 import com.gridgain.demo.datagen.config.WeightedChoice
 import com.gridgain.demo.datagen.config.WeightedChoiceSpec
 import com.gridgain.demo.datagen.config.YamlDataSpec
+import com.gridgain.demo.datagen.config.CURRENT_STATE_SCHEMA_VERSION
+import com.gridgain.demo.datagen.state.GeneratorState
+import com.gridgain.demo.datagen.state.SequenceState
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -24,21 +27,21 @@ class ValueSourceFactoryTest {
     @Test
     fun `builds a SequenceValueSource for SequenceSpec`(@TempDir dir: Path) {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
-        val vs = factory.build(column(SequenceSpec(start = 5, step = 1)))
+        val vs = factory.build(schemaName = "customer", column = column(SequenceSpec(start = 5, step = 1)))
         assertThat(vs).isInstanceOf(SequenceValueSource::class.java)
     }
 
     @Test
     fun `wraps in NullRateApplicator when null_rate is positive`(@TempDir dir: Path) {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
-        val vs = factory.build(column(SequenceSpec(start = 1, step = 1), nullRate = 0.1))
+        val vs = factory.build(schemaName = "customer", column = column(SequenceSpec(start = 1, step = 1), nullRate = 0.1))
         assertThat(vs).isInstanceOf(NullRateApplicator::class.java)
     }
 
     @Test
     fun `does not wrap when null_rate is zero`(@TempDir dir: Path) {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
-        val vs = factory.build(column(SequenceSpec(start = 1, step = 1), nullRate = 0.0))
+        val vs = factory.build(schemaName = "customer", column = column(SequenceSpec(start = 1, step = 1), nullRate = 0.0))
         assertThat(vs).isNotInstanceOf(NullRateApplicator::class.java)
     }
 
@@ -46,13 +49,13 @@ class ValueSourceFactoryTest {
     fun `builds DataFaker, Unique, WeightedChoice, and Yaml-backed sources`(@TempDir dir: Path) {
         dir.resolve("c.yaml").writeText("xs:\n  - a\n  - b\n")
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
-        assertThat(factory.build(column(DataFakerSpec("#{name.firstName}"))))
+        assertThat(factory.build(schemaName = "customer", column = column(DataFakerSpec("#{name.firstName}"))))
             .isInstanceOf(DataFakerValueSource::class.java)
-        assertThat(factory.build(column(UniqueSpec("#{name.firstName}"))))
+        assertThat(factory.build(schemaName = "customer", column = column(UniqueSpec("#{name.firstName}"))))
             .isInstanceOf(UniqueValueSource::class.java)
-        assertThat(factory.build(column(WeightedChoiceSpec(listOf(WeightedChoice("a", 1.0))))))
+        assertThat(factory.build(schemaName = "customer", column = column(WeightedChoiceSpec(listOf(WeightedChoice("a", 1.0))))))
             .isInstanceOf(WeightedChoiceValueSource::class.java)
-        assertThat(factory.build(column(YamlDataSpec(path = "c.yaml", key = "xs"))))
+        assertThat(factory.build(schemaName = "customer", column = column(YamlDataSpec(path = "c.yaml", key = "xs"))))
             .isInstanceOf(YamlBackedValueSource::class.java)
     }
 
@@ -60,10 +63,48 @@ class ValueSourceFactoryTest {
     fun `builds ParentFkRef and KeySuffix sources`(@TempDir dir: Path) {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         assertThat(
-            factory.build(column(ParentFkRefSpec("customer", "id", listOf(CohortBucket(1.0, 1)))))
+            factory.build(schemaName = "customer", column = column(ParentFkRefSpec("customer", "id", listOf(CohortBucket(1.0, 1)))))
         ).isInstanceOf(ParentFkRefValueSource::class.java)
         assertThat(
-            factory.build(column(KeySuffixSpec(baseColumn = "id", separator = "-", length = 4)))
+            factory.build(schemaName = "customer", column = column(KeySuffixSpec(baseColumn = "id", separator = "-", length = 4)))
         ).isInstanceOf(KeySuffixValueSource::class.java)
+    }
+
+    @Test fun `seeds SequenceValueSource from loadedState`(@TempDir dir: Path) {
+        val column = ColumnSpec(
+            name = "id", key = true, valueSource = SequenceSpec(start = 1, step = 1),
+            nullRate = 0.0, affinity = false,
+        )
+        val state = GeneratorState(
+            schemaVersion = CURRENT_STATE_SCHEMA_VERSION,
+            sequences = listOf(SequenceState("customer", "id", 5000L)),
+            keys = emptyList(), runHistory = emptyList(),
+        )
+        val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 0L, loadedState = state)
+        val vs = factory.build(schemaName = "customer", column = column) as SequenceValueSource
+        assertThat(vs.currentNext).isEqualTo(5000L)
+    }
+
+    @Test fun `omitting loadedState preserves prior factory behavior`(@TempDir dir: Path) {
+        val column = ColumnSpec(
+            name = "id", key = true, valueSource = SequenceSpec(start = 7, step = 1),
+            nullRate = 0.0, affinity = false,
+        )
+        val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 0L)
+        val vs = factory.build(schemaName = "customer", column = column) as SequenceValueSource
+        assertThat(vs.currentNext).isEqualTo(7L)
+    }
+
+    @Test fun `snapshotSequences returns SequenceState entries for all built sequences`(@TempDir dir: Path) {
+        val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 0L)
+        val cIdCol = ColumnSpec(
+            name = "id", key = true, valueSource = SequenceSpec(start = 1, step = 1),
+            nullRate = 0.0, affinity = false,
+        )
+        val cIdSrc = factory.build(schemaName = "customer", column = cIdCol) as SequenceValueSource
+        val ctx = GenerationContext(net.datafaker.Faker())
+        cIdSrc.next(ctx); cIdSrc.next(ctx)  // advance to 3
+        val snap = factory.snapshotSequences()
+        assertThat(snap).containsExactly(SequenceState("customer", "id", 3L))
     }
 }

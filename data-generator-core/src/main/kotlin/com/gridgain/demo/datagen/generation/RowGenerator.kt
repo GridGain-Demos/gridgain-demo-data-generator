@@ -9,7 +9,7 @@ class RowGenerator(
     private val faker: Faker,
 ) {
     private val sources: List<Pair<String, ValueSource>> =
-        schema.columns.map { it.name to factory.build(it) }
+        schema.columns.map { it.name to factory.build(schemaName = schema.name, column = it) }
 
     fun next(parentRow: Map<String, Any?>? = null): LinkedHashMap<String, Any?> {
         val rowSoFar: MutableMap<String, Any?> = mutableMapOf()
