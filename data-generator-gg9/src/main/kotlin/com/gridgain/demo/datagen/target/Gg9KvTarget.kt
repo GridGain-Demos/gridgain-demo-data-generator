@@ -7,6 +7,8 @@ import com.gridgain.demo.client.gg9.DemoAddressFinder
 import org.apache.ignite.client.IgniteClient
 import org.apache.ignite.table.Tuple
 import org.apache.ignite.tx.Transaction
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /**
  * GG9 KV target. Lazily opens an `IgniteClient` on first `write` or `read` call.
@@ -29,25 +31,42 @@ class Gg9KvTarget(
 
     @Volatile private var client: IgniteClient? = null
 
+    /** Cached fatal connection failure — see Gg8KvTarget for the rationale (avoids
+     *  re-probing on every write when the cluster is unreachable). */
+    @Volatile private var fatalConnectFailure: MisconfigurationException? = null
+
     private fun ensureClient(): IgniteClient {
         val existing = client
         if (existing != null) return existing
+        fatalConnectFailure?.let { throw it }
         synchronized(this) {
             val again = client
             if (again != null) return again
+            fatalConnectFailure?.let { throw it }
+            // Pre-probe TCP reachability — see Gg8KvTarget for the rationale. The GG9
+            // builder has connectTimeout, but we keep the manual probe symmetric with GG8
+            // so the failure mode + error message are the same regardless of flavor.
+            val finder = DemoAddressFinder(clusterName)
+            try {
+                probeReachability(finder.addresses, clusterName)
+            } catch (e: MisconfigurationException) {
+                fatalConnectFailure = e
+                throw e
+            }
             val opened = try {
-                // Bound the initial TCP handshake so an unreachable cluster fails fast.
                 IgniteClient.builder()
-                    .addressFinder(DemoAddressFinder(clusterName))
+                    .addressFinder(finder)
                     .connectTimeout(CONNECT_TIMEOUT_MS)
                     .build()
             } catch (e: Exception) {
-                throw MisconfigurationException(
+                val wrapped = MisconfigurationException(
                     "Gg9KvTarget could not connect to GG9 cluster '$clusterName': ${e.message}. " +
                     "Verify the cluster is reachable, client-endpoints.yaml is on the resolution path, " +
                     "and the cluster name matches the clusters[].name entry.",
                     cause = e,
                 )
+                fatalConnectFailure = wrapped
+                throw wrapped
             }
             client = opened
             return opened
@@ -132,9 +151,46 @@ class Gg9KvTarget(
         client = null
     }
 
+    /**
+     * Probes each `host:port` with a manual `Socket.connect(addr, timeout)` and throws
+     * `MisconfigurationException` with remediation if every probe fails. Symmetric with
+     * `Gg8KvTarget.probeReachability`.
+     */
+    private fun probeReachability(addresses: Array<String>, clusterName: String) {
+        val routable = addresses.filter { !it.contains(".svc.cluster.local") }
+        if (routable.isEmpty()) {
+            throw MisconfigurationException(
+                "Gg9KvTarget: DemoAddressFinder returned no routable addresses for cluster '$clusterName' " +
+                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}). " +
+                "Verify client-endpoints.yaml has a clusters[].name entry matching '$clusterName' " +
+                "and that the local context's addresses are populated."
+            )
+        }
+        val failures = mutableListOf<String>()
+        for (addr in routable) {
+            val (host, port) = addr.substringBefore(':') to addr.substringAfter(':').toInt()
+            try {
+                Socket().use { it.connect(InetSocketAddress(host, port), PROBE_TIMEOUT_MS) }
+                return
+            } catch (e: Exception) {
+                failures.add("$addr: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+        throw MisconfigurationException(
+            "Gg9KvTarget could not reach any endpoint of GG9 cluster '$clusterName' within " +
+            "${PROBE_TIMEOUT_MS}ms per address. Failures:\n" +
+            failures.joinToString(separator = "\n  - ", prefix = "  - ") + "\n" +
+            "Verify the cluster is up, network paths are open, and client-endpoints.yaml " +
+            "addresses match the running cluster."
+        )
+    }
+
     private companion object {
-        /** Bound the GG9 builder's connect attempt so an unreachable cluster fails fast.
-         *  10s is generous for any healthy cluster and short enough to fail fast otherwise. */
+        /** Per-address TCP probe timeout (3s — matches GG8 path). */
+        const val PROBE_TIMEOUT_MS: Int = 3_000
+
+        /** Passed to GG9's IgniteClient.builder.connectTimeout — bounds the GG9 client's own
+         *  internal connect after the pre-probe succeeds. */
         const val CONNECT_TIMEOUT_MS: Long = 10_000L
     }
 }
