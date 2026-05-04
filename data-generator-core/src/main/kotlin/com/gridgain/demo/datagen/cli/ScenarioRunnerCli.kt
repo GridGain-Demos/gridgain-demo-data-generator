@@ -1,5 +1,6 @@
 package com.gridgain.demo.datagen.cli
 
+import com.gridgain.demo.datagen.config.CURRENT_STATE_SCHEMA_VERSION
 import com.gridgain.demo.datagen.config.ConfigurationParser
 import com.gridgain.demo.datagen.config.ParsedConfiguration
 import com.gridgain.demo.datagen.config.ScenarioSpec
@@ -11,11 +12,16 @@ import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
 import com.gridgain.demo.datagen.output.OutputLayout
 import com.gridgain.demo.datagen.runtime.RunId
+import com.gridgain.demo.datagen.scenario.KeyRegistry
 import com.gridgain.demo.datagen.scenario.ScenarioResult
 import com.gridgain.demo.datagen.scenario.ScenarioRunner
+import com.gridgain.demo.datagen.state.GeneratorState
+import com.gridgain.demo.datagen.state.RunHistoryEntry
+import com.gridgain.demo.datagen.state.StatePersister
 import com.gridgain.demo.datagen.target.Target
 import net.datafaker.Faker
 import org.slf4j.LoggerFactory
+import java.time.Instant
 
 object ScenarioRunnerCli {
 
@@ -60,7 +66,24 @@ object ScenarioRunnerCli {
     }
 
     fun run(parsed: CliArgs, resolution: Resolution, target: Target, logger: DataGenLogger): ScenarioResult {
-        val factory = ValueSourceFactory(yamlDataRoot = parsed.dataFile.parent, seed = 0L)
+        val layout = OutputLayout(parsed.outputDir)
+        layout.ensureBaseDirectories()
+
+        val persister = StatePersister()
+        val loadedState: GeneratorState? = persister.load(layout.stateFile)
+        if (loadedState != null) {
+            logger.lifecycle(
+                "loaded prior state: ${loadedState.sequences.size} sequence cursors, " +
+                "${loadedState.keys.sumOf { it.keys.size }} keys, " +
+                "${loadedState.runHistory.size} prior runs (from ${layout.stateFile})."
+            )
+        }
+
+        val factory = ValueSourceFactory(
+            yamlDataRoot = parsed.dataFile.parent,
+            seed = 0L,
+            loadedState = loadedState,
+        )
         val rootSchema = resolution.scenario.rootSchemas.first()
         val gen = BusinessEventGenerator(
             data = resolution.parsedConfig.data,
@@ -70,21 +93,41 @@ object ScenarioRunnerCli {
             cohortSeed = 0L,
         )
 
+        val keyRegistry = KeyRegistry()
+        if (loadedState != null) keyRegistry.restore(loadedState.keys)
+
         val runner = ScenarioRunner(
             scenario = resolution.scenario,
             data = resolution.parsedConfig.data,
             generator = gen,
             target = target,
+            keyRegistry = keyRegistry,
         )
 
+        val startedAt = Instant.now()
         val result = runner.run()
+        val completedAt = Instant.now()
         if (target is AutoCloseable) target.close()
 
-        val layout = OutputLayout(parsed.outputDir)
-        layout.ensureBaseDirectories()
         val runId = RunId.generate()
         val resultFile = layout.resultFile(runId)
         ScenarioResult.write(result, resultFile)
+
+        val newState = GeneratorState(
+            schemaVersion = CURRENT_STATE_SCHEMA_VERSION,
+            sequences = factory.snapshotSequences(),
+            keys = runner.keyRegistrySnapshot(),
+            runHistory = (loadedState?.runHistory ?: emptyList()) + RunHistoryEntry(
+                runId = runId,
+                scenarioName = resolution.scenario.name,
+                startedAt = startedAt.toString(),
+                completedAt = completedAt.toString(),
+                successCount = result.successCount,
+                errorCount = result.errorCount,
+                stopReason = result.stopReason,
+            ),
+        )
+        persister.save(newState, layout.stateFile)
 
         logger.lifecycle(
             "scenario '${resolution.scenario.name}' complete: ${result.successCount} successes, " +
@@ -92,6 +135,7 @@ object ScenarioRunnerCli {
             "stop_reason=${result.stopReason}"
         )
         logger.lifecycle("result written to $resultFile")
+        logger.lifecycle("state written to ${layout.stateFile}")
 
         return result
     }
