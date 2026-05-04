@@ -32,7 +32,11 @@ class Gg9SqlProvisioner(
         val created = mutableListOf<String>()
 
         val client: IgniteClient = try {
-            IgniteClient.builder().addressFinder(DemoAddressFinder(clusterName)).build()
+            // 10s connect cap matches Gg9KvTarget — fail fast on unreachable clusters.
+            IgniteClient.builder()
+                .addressFinder(DemoAddressFinder(clusterName))
+                .connectTimeout(10_000L)
+                .build()
         } catch (e: Exception) {
             return ProvisioningOutcome(emptyList(), emptyList(), emptyList(), listOf(
                 "Gg9SqlProvisioner.apply could not connect to GG9 cluster '$clusterName': ${e.message}. " +

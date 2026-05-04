@@ -36,8 +36,10 @@ class Gg9KvTarget(
             val again = client
             if (again != null) return again
             val opened = try {
+                // Bound the initial TCP handshake so an unreachable cluster fails fast.
                 IgniteClient.builder()
                     .addressFinder(DemoAddressFinder(clusterName))
+                    .connectTimeout(CONNECT_TIMEOUT_MS)
                     .build()
             } catch (e: Exception) {
                 throw MisconfigurationException(
@@ -128,5 +130,11 @@ class Gg9KvTarget(
     override fun close() {
         client?.close()
         client = null
+    }
+
+    private companion object {
+        /** Bound the GG9 builder's connect attempt so an unreachable cluster fails fast.
+         *  10s is generous for any healthy cluster and short enough to fail fast otherwise. */
+        const val CONNECT_TIMEOUT_MS: Long = 10_000L
     }
 }

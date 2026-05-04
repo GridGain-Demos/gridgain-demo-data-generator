@@ -37,7 +37,11 @@ class Gg8KvTarget(
         synchronized(this) {
             val again = client
             if (again != null) return again
-            val cfg = ClientConfiguration().setAddressesFinder(DemoAddressFinder(clusterName))
+            // Bound the connect attempt so an unreachable cluster fails fast (~10s) instead
+            // of hanging on the kernel's default TCP retry budget (~minutes).
+            val cfg = ClientConfiguration()
+                .setAddressesFinder(DemoAddressFinder(clusterName))
+                .setTimeout(CONNECT_TIMEOUT_MS)
             val opened = try {
                 Ignition.startClient(cfg)
             } catch (e: Exception) {
@@ -111,5 +115,12 @@ class Gg8KvTarget(
     override fun close() {
         client?.close()
         client = null
+    }
+
+    private companion object {
+        /** GG8 thin client treats `setTimeout` as the global op timeout (no separate connect
+         *  timeout). 10s is generous for any healthy cluster and short enough to fail fast on
+         *  unreachable endpoints. */
+        const val CONNECT_TIMEOUT_MS: Int = 10_000
     }
 }

@@ -36,7 +36,10 @@ class Gg8XmlProvisioner(
     }
 
     override fun apply(plan: ProvisioningPlan): ProvisioningOutcome {
-        val cfg = ClientConfiguration().setAddressesFinder(DemoAddressFinder(clusterName))
+        // 10s connect/op cap matches Gg8KvTarget — see comment there.
+        val cfg = ClientConfiguration()
+            .setAddressesFinder(DemoAddressFinder(clusterName))
+            .setTimeout(10_000)
         val created = mutableListOf<String>()
         val existed = mutableListOf<String>()
         val errors = mutableListOf<String>()
