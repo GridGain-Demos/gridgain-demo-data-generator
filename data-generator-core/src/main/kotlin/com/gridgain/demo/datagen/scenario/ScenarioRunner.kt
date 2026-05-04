@@ -12,6 +12,7 @@ import com.gridgain.demo.datagen.config.UntilStopDurationSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
+import com.gridgain.demo.datagen.state.KeyRegistryState
 import com.gridgain.demo.datagen.target.Target
 import java.time.Duration
 import java.time.Instant
@@ -24,8 +25,11 @@ class ScenarioRunner(
     private val target: Target,
     private val untilStopCap: Duration = Duration.ofMinutes(1),
     private val decisionRandom: Random = Random(),
+    private val keyRegistry: KeyRegistry = KeyRegistry(),
 ) {
-    private val keyRegistry = KeyRegistry()
+    /** Captures the post-run registry contents for `state.yaml`. Safe to call multiple times. */
+    fun keyRegistrySnapshot(): List<KeyRegistryState> = keyRegistry.snapshot()
+
     private val schemasByName: Map<String, SchemaSpec> = data.schemas.associateBy { it.name }
     private val keyColumnByName: Map<String, String> = data.schemas.associate { schema ->
         schema.name to (schema.columns.firstOrNull { it.key }?.name
