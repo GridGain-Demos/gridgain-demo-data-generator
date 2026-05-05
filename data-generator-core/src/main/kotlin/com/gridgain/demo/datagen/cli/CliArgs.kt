@@ -9,6 +9,15 @@ data class CliArgs(
     val scenarioName: String,
     val clusterEndpoints: Path,
     val outputDir: Path,
+    /**
+     * Optional override for `ops.otel.endpoint`. When present, wins over the ops.yaml
+     * value. When `ops.otel.exporter == NONE`, the override implicitly upgrades the
+     * exporter to OTLP (the override only makes sense if exporting is wanted). Plugin-
+     * driven runs use this flag to inherit the deployed Prometheus/Grafana monitor's
+     * OTLP collector endpoint without forcing the user to copy it into ops.yaml
+     * (closes F13). Standalone generator runs leave it null.
+     */
+    val otelEndpointOverride: String? = null,
 )
 
 fun parseArgs(args: Array<String>): CliArgs {
@@ -26,5 +35,6 @@ fun parseArgs(args: Array<String>): CliArgs {
         scenarioName = map.getValue("--scenario"),
         clusterEndpoints = Paths.get(map.getValue("--cluster-endpoints")),
         outputDir = Paths.get(map.getValue("--output")),
+        otelEndpointOverride = map["--otel-endpoint-override"]?.takeIf { it.isNotBlank() },
     )
 }

@@ -2,6 +2,8 @@ package com.gridgain.demo.datagen.cli
 
 import com.gridgain.demo.datagen.config.CURRENT_STATE_SCHEMA_VERSION
 import com.gridgain.demo.datagen.config.ConfigurationParser
+import com.gridgain.demo.datagen.config.OtelExporter
+import com.gridgain.demo.datagen.config.OtelSpec
 import com.gridgain.demo.datagen.config.ParsedConfiguration
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.TargetSpec
@@ -65,7 +67,8 @@ object ScenarioRunnerCli {
             schema.name to schema.columns.first { it.key }.name
         }
 
-        val openTelemetry = OtelInitializer.fromSpec(parsedConfig.ops.otel, logger)
+        val effectiveOtelSpec = applyEndpointOverride(parsedConfig.ops.otel, parsed.otelEndpointOverride, logger)
+        val openTelemetry = OtelInitializer.fromSpec(effectiveOtelSpec, logger)
         val instruments = Instruments(openTelemetry)
 
         return Resolution(
@@ -76,6 +79,30 @@ object ScenarioRunnerCli {
             openTelemetry = openTelemetry,
             instruments = instruments,
         )
+    }
+
+    /**
+     * F13: when `--otel-endpoint-override` is supplied (plugin-driven runs inheriting from
+     * a deployed Prometheus/Grafana monitor), it wins over `ops.otel.endpoint`. If the
+     * user's `ops.otel.exporter` was `NONE`, the override implicitly upgrades it to `OTLP`
+     * — passing an override only makes sense if metrics should be exported. Standalone
+     * runs leave `override = null` and `ops.otel` flows through unchanged.
+     */
+    internal fun applyEndpointOverride(
+        opsOtel: OtelSpec,
+        override: String?,
+        logger: DataGenLogger,
+    ): OtelSpec {
+        if (override.isNullOrBlank()) return opsOtel
+        val effectiveExporter = if (opsOtel.exporter == OtelExporter.NONE) OtelExporter.OTLP else opsOtel.exporter
+        if (opsOtel.exporter == OtelExporter.NONE) {
+            logger.lifecycle("otel: --otel-endpoint-override='$override' supplied; promoting exporter NONE → OTLP.")
+        } else if (opsOtel.endpoint != null && opsOtel.endpoint != override) {
+            logger.lifecycle("otel: --otel-endpoint-override='$override' overrides ops.otel.endpoint='${opsOtel.endpoint}'.")
+        } else {
+            logger.lifecycle("otel: applying --otel-endpoint-override='$override'.")
+        }
+        return opsOtel.copy(exporter = effectiveExporter, endpoint = override)
     }
 
     fun run(parsed: CliArgs, resolution: Resolution, target: Target, logger: DataGenLogger): ScenarioResult {

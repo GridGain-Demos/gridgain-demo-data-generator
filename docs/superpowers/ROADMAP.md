@@ -3,13 +3,13 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-05 (after F12 closure — tx_commit/tx_rollback emission)
+Last updated: 2026-05-05 (after F13 closure — plugin OTel endpoint inheritance)
 
 ---
 
 ## Current State
 
-Plans 1–11 implemented. **221 tests pass** (213 unit + 8 env-gated integration)
+Plans 1–11 implemented. **227 tests pass** (219 unit + 8 env-gated integration)
 across three subprojects: `data-generator-core` (config, generators,
 scenario, output, provisioning plan factory, observability), `data-generator-gg8`
 (`Gg8KvTarget` + `Gg8XmlProvisioner` with env-gated integration tests),
@@ -76,15 +76,6 @@ defaults but a future plan should:
 (b) parameterize VARCHAR length per column,
 (c) extend `SqlType` to cover timestamp / decimal / numeric.
 
-### F13 — Plugin endpoint inheritance for OTel
-*Source: Plan 11 spec §7 deferral.*
-Spec §7 says the generator inherits the OTel endpoint from a plugin-declared
-Prometheus/Grafana monitor. Plan 11 ships standalone `ops.yaml`-driven OTel
-only. Inheritance requires (a) plugin-side: surface the monitor's endpoint
-to `DataGenerateTask`; (b) generator-side: a CLI flag (e.g.
-`--otel-endpoint-override`) that wins over `ops.otel`. Capture the contract
-before implementing so plugin and generator ship in lock-step.
-
 ---
 
 ## Closed Follow-ups
@@ -149,6 +140,17 @@ homogeneity enforced); `restore` coerces yaml strings back via
 `schema_version` bumped 1 → 2 — no migration; v1 files fail-load with
 remediation per spec §6. Added spec §13 step 7 restart-then-read test
 (`ScenarioRunnerCliRestartReadTest`) confirming `Long` round-trip.
+
+### F13 — Plugin OTel endpoint inheritance ✅ *(closed 2026-05-05)*
+Generator-side: `--otel-endpoint-override` CLI flag wins over
+`ops.otel.endpoint`; promotes `exporter: NONE` → `OTLP` (the override only
+makes sense when exporting). Plugin-side: `DataGenerateTask` reads the
+resolved cluster's monitor bindings from `deployment.yaml` and, when a
+`PrometheusGrafanaAttached` monitor is present, passes its
+`prometheusOtlpEndpoint` as the override. Generator's `OtelInitializer`
+falls back to noop on unreachable endpoints, so a stale or laptop-
+unreachable URL doesn't crash the run. Plugin and generator must ship
+lock-step (the new `--otel-endpoint-override` flag is part of the contract).
 
 ### F12 — `tx_commit` / `tx_rollback` op type emission ✅ *(closed 2026-05-05)*
 `WriteOutcome` carries a new `transactionOutcome: TransactionOutcome`
