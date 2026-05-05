@@ -3,6 +3,7 @@ package com.gridgain.demo.datagen.target
 import com.gridgain.demo.datagen.config.TransactionScope
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
+import com.gridgain.demo.datagen.target.TransactionOutcome
 import com.gridgain.demo.client.gg9.DemoAddressFinder
 import org.apache.ignite.client.IgniteClient
 import org.apache.ignite.table.Tuple
@@ -74,19 +75,31 @@ class Gg9KvTarget(
     }
 
     override fun write(event: BusinessEvent): WriteOutcome {
-        return try {
-            val ignite = ensureClient()
-            if (transactionScope == TransactionScope.BUSINESS_EVENT) {
+        val ignite = try {
+            ensureClient()
+        } catch (e: Exception) {
+            // Pre-tx failure — never started a transaction, so NONE.
+            return WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.NONE)
+        }
+        return if (transactionScope == TransactionScope.BUSINESS_EVENT) {
+            try {
                 ignite.transactions().runInTransaction<Unit> { tx ->
                     putAllForEvent(ignite, tx, event)
                 }
-                WriteOutcome(success = true)
-            } else {
-                putAllForEvent(ignite, tx = null, event = event)
-                WriteOutcome(success = true)
+                WriteOutcome(success = true, transactionOutcome = TransactionOutcome.COMMITTED)
+            } catch (e: Exception) {
+                // GG9's runInTransaction auto-rolls-back when its lambda throws; the
+                // exception propagates here. Tag as ROLLED_BACK so the runner emits the
+                // tx_rollback metric.
+                WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.ROLLED_BACK)
             }
-        } catch (e: Exception) {
-            WriteOutcome(success = false, error = e)
+        } else {
+            try {
+                putAllForEvent(ignite, tx = null, event = event)
+                WriteOutcome(success = true, transactionOutcome = TransactionOutcome.NONE)
+            } catch (e: Exception) {
+                WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.NONE)
+            }
         }
     }
 

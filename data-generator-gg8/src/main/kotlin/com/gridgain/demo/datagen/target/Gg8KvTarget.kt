@@ -3,6 +3,7 @@ package com.gridgain.demo.datagen.target
 import com.gridgain.demo.datagen.config.TransactionScope
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
+import com.gridgain.demo.datagen.target.TransactionOutcome
 import com.gridgain.demo.client.gg8.DemoAddressFinder
 import org.apache.ignite.Ignition
 import org.apache.ignite.client.IgniteClient
@@ -87,17 +88,18 @@ class Gg8KvTarget(
                 try {
                     putAllForEvent(ignite, event)
                     tx.commit()
-                    WriteOutcome(success = true)
+                    WriteOutcome(success = true, transactionOutcome = TransactionOutcome.COMMITTED)
                 } catch (e: Exception) {
                     try { tx.rollback() } catch (_: Exception) { /* swallow rollback failure */ }
-                    WriteOutcome(success = false, error = e)
+                    WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.ROLLED_BACK)
                 }
             } else {
                 putAllForEvent(ignite, event)
-                WriteOutcome(success = true)
+                WriteOutcome(success = true, transactionOutcome = TransactionOutcome.NONE)
             }
         } catch (e: Exception) {
-            WriteOutcome(success = false, error = e)
+            // Pre-tx failure (e.g., ensureClient) — never started a transaction, so NONE.
+            WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.NONE)
         }
     }
 

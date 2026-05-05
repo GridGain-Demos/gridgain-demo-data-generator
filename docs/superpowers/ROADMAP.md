@@ -3,13 +3,13 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-05 (after F11 closure — KeyRegistry type fidelity)
+Last updated: 2026-05-05 (after F12 closure — tx_commit/tx_rollback emission)
 
 ---
 
 ## Current State
 
-Plans 1–11 implemented. **217 tests pass** (209 unit + 8 env-gated integration)
+Plans 1–11 implemented. **221 tests pass** (213 unit + 8 env-gated integration)
 across three subprojects: `data-generator-core` (config, generators,
 scenario, output, provisioning plan factory, observability), `data-generator-gg8`
 (`Gg8KvTarget` + `Gg8XmlProvisioner` with env-gated integration tests),
@@ -75,15 +75,6 @@ defaults but a future plan should:
 (a) infer from the runtime type of `WeightedChoiceSpec.choices[0].value`,
 (b) parameterize VARCHAR length per column,
 (c) extend `SqlType` to cover timestamp / decimal / numeric.
-
-### F12 — `tx_commit` / `tx_rollback` op type emission
-*Source: Plan 11 Task 7 design note.*
-Spec §7 lists `op = put | get | tx_commit | tx_rollback`. Plan 11 emits
-`put` and `get` only — the transaction wrap lives inside
-`Gg{8,9}KvTarget.putAllForEvent`. Emitting `tx_commit` / `tx_rollback`
-requires lifting the transaction boundary into `ScenarioRunner.tick` or
-threading `Instruments` into the flavor targets. Pick a path when
-`business_event` traffic on a customer scenario makes the gap material.
 
 ### F13 — Plugin endpoint inheritance for OTel
 *Source: Plan 11 spec §7 deferral.*
@@ -158,6 +149,19 @@ homogeneity enforced); `restore` coerces yaml strings back via
 `schema_version` bumped 1 → 2 — no migration; v1 files fail-load with
 remediation per spec §6. Added spec §13 step 7 restart-then-read test
 (`ScenarioRunnerCliRestartReadTest`) confirming `Long` round-trip.
+
+### F12 — `tx_commit` / `tx_rollback` op type emission ✅ *(closed 2026-05-05)*
+`WriteOutcome` carries a new `transactionOutcome: TransactionOutcome`
+(`NONE | COMMITTED | ROLLED_BACK`). `Gg8KvTarget` populates it from the
+explicit `txStart`/`commit`/`rollback` flow; `Gg9KvTarget` populates it
+from the `runInTransaction` lambda's success vs. exception path (the SDK
+auto-rolls-back when the lambda throws). `ScenarioRunner.tick` reads
+the outcome and emits `op=tx_commit` or `op=tx_rollback` as separate
+points on `data_generator.op.{count, latency}`, alongside the existing
+`op=put`. Latency for the tx op uses the wall time of the wrapped event
+— a meaningful proxy for "how long committed/rolled-back transactions
+take" in aggregate. Targets keep owning the transaction lifecycle — no
+architectural shift.
 
 ---
 

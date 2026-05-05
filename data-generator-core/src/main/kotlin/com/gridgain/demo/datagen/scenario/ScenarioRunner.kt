@@ -15,6 +15,7 @@ import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.state.KeyRegistryState
 import com.gridgain.demo.datagen.target.Target
+import com.gridgain.demo.datagen.target.TransactionOutcome
 import java.time.Duration
 import java.time.Instant
 import java.util.Random
@@ -118,6 +119,7 @@ class ScenarioRunner(
 
         instruments.inFlight.add(1, attrs)
         val t0 = System.nanoTime()
+        var transactionOutcome: TransactionOutcome = TransactionOutcome.NONE
         val success: Boolean = try {
             if (isRead) {
                 val key = keyRegistry.sample(rootSchemaName, decisionRandom)!!
@@ -132,7 +134,9 @@ class ScenarioRunner(
                     val childKeyColumn = keyColumnByName[childSchema] ?: return@forEach
                     rows.forEach { row -> row[childKeyColumn]?.let { keyRegistry.register(childSchema, it) } }
                 }
-                target.write(finalEvent).success
+                val outcome = target.write(finalEvent)
+                transactionOutcome = outcome.transactionOutcome
+                outcome.success
             }
         } catch (e: Exception) {
             instruments.opErrors.add(1, attrs.toBuilder()
@@ -146,12 +150,29 @@ class ScenarioRunner(
         instruments.opCount.add(1, attrs)
         if (!success) instruments.opErrors.add(1, attrs.toBuilder()
             .put(Instruments.ATTR_EXCEPTION, "TargetReportedFailure").build())
+
+        // F12: emit tx_commit / tx_rollback as separate op-tagged points alongside the
+        // underlying put. Latency for the tx op is the wall time of the wrapped event —
+        // a meaningful proxy for "how long committed/rolled-back transactions take" in
+        // aggregate. The error counter for a rollback is already recorded above on op=put,
+        // so we don't double-count exceptions here.
+        when (transactionOutcome) {
+            TransactionOutcome.COMMITTED -> emitTxOp(rootSchemaName, "tx_commit", latencyNanos)
+            TransactionOutcome.ROLLED_BACK -> emitTxOp(rootSchemaName, "tx_rollback", latencyNanos)
+            TransactionOutcome.NONE -> { /* no transaction wrap; nothing to emit */ }
+        }
         evaluator.recordOutcome(success = success, latencyNanos = latencyNanos)
 
         totalAttempts++
         val elapsedSec = (System.nanoTime() - startedNanos) / 1_000_000_000.0
         if (elapsedSec > 0) instruments.observedRateRef.set(totalAttempts / elapsedSec)
         return success
+    }
+
+    private fun emitTxOp(schemaName: String, op: String, latencyNanos: Long) {
+        val txAttrs = instruments.opAttributes(scenario.name, targetName, schemaName, op)
+        instruments.opLatency.record(latencyNanos.toDouble(), txAttrs)
+        instruments.opCount.add(1, txAttrs)
     }
 
     private fun maybeApplyUpdate(event: BusinessEvent, rootSchema: SchemaSpec, keyColumn: String): BusinessEvent {
