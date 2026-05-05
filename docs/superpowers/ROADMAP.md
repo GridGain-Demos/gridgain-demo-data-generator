@@ -3,15 +3,15 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-04 (after Plan 10 — state persistence)
+Last updated: 2026-05-05 (after Plan 11 — OpenTelemetry)
 
 ---
 
 ## Current State
 
-Plans 1–10 implemented. **190 tests pass** (182 unit + 8 env-gated integration)
+Plans 1–11 implemented. **208 tests pass** (200 unit + 8 env-gated integration)
 across three subprojects: `data-generator-core` (config, generators,
-scenario, output, provisioning plan factory), `data-generator-gg8`
+scenario, output, provisioning plan factory, observability), `data-generator-gg8`
 (`Gg8KvTarget` + `Gg8XmlProvisioner` with env-gated integration tests),
 `data-generator-gg9` (`Gg9KvTarget` + `Gg9SqlProvisioner` with env-gated
 integration tests). After Plan 9 every scenario carries `provisioning: skip|emit|apply`;
@@ -96,6 +96,24 @@ schema and reverse-coerce on `restore`, OR store keys as Jackson polymorphic
 values. Spec §13 verification step 7 (restart-then-read) should add a test
 for this.
 
+### F12 — `tx_commit` / `tx_rollback` op type emission
+*Source: Plan 11 Task 7 design note.*
+Spec §7 lists `op = put | get | tx_commit | tx_rollback`. Plan 11 emits
+`put` and `get` only — the transaction wrap lives inside
+`Gg{8,9}KvTarget.putAllForEvent`. Emitting `tx_commit` / `tx_rollback`
+requires lifting the transaction boundary into `ScenarioRunner.tick` or
+threading `Instruments` into the flavor targets. Pick a path when
+`business_event` traffic on a customer scenario makes the gap material.
+
+### F13 — Plugin endpoint inheritance for OTel
+*Source: Plan 11 spec §7 deferral.*
+Spec §7 says the generator inherits the OTel endpoint from a plugin-declared
+Prometheus/Grafana monitor. Plan 11 ships standalone `ops.yaml`-driven OTel
+only. Inheritance requires (a) plugin-side: surface the monitor's endpoint
+to `DataGenerateTask`; (b) generator-side: a CLI flag (e.g.
+`--otel-endpoint-override`) that wins over `ops.otel`. Capture the contract
+before implementing so plugin and generator ship in lock-step.
+
 ---
 
 ## Closed Follow-ups
@@ -147,6 +165,44 @@ schema no longer draw identical sequences. `WeightedChoiceValueSource`
 got the same per-column decorrelation as a defensive bonus.
 
 ---
+
+## Plan 11 — OpenTelemetry *(complete)*
+
+Per spec §7. Optional top-level `otel: { exporter: none|otlp|prometheus,
+endpoint, attributes }` block in `ops.yaml`. Default `exporter: none`
+returns `OpenTelemetry.noop()` so existing fixtures and tests stay
+offline-runnable.
+
+- **Single registration point.** `observability/Instruments.kt` owns every
+  metric: histogram (`data_generator.op.latency`), counters
+  (`op.count`, `op.errors`), and three gauges (`in_flight`, `target_rate`,
+  `observed_rate`). Adding a new instrument is a one-file change.
+- **OtelInitializer.fromSpec** dispatches NONE/OTLP/PROMETHEUS, falling
+  back to noop with a WARN on misconfig — production never crashes on
+  bad OTel.
+- **ScenarioRunner.tick** records latency + count per op, error counter
+  tagged by exception class, in-flight up-down counter wraps each op
+  with try/finally. Op type is `put`/`get` only — `tx_commit`/`tx_rollback`
+  deferred (F12).
+- **Lifecycle events** (`scenario.started`, `scenario.stopped`,
+  `provisioning.applied`, `state.persisted`) flow through `RunLog` —
+  multi-doc yaml at `runs/<run-id>/run.log.yaml` plus optional OTel log
+  records when an `otelLogger` is supplied. `Resolution.pendingEvents`
+  buffers `provisioning.applied` from `Gg{8,9}Main` since it fires
+  before the `RunLog` exists.
+- **No GlobalOpenTelemetry registration anywhere.** Every consumer takes
+  an `OpenTelemetry` instance explicitly so tests can inject
+  `InMemoryMetricReader` / `InMemoryLogRecordExporter`.
+
+Live-cluster smoke verified against `taxi-demo-gcp-8a` with
+`provisioning: emit` + `read_ratio: 0.10`: four-doc `run.log.yaml`
+covering `provisioning.applied → scenario.started → scenario.stopped →
+state.persisted`, ISO timestamps, attribute maps. 194 successes,
+6 errors out of 200 (stale-key reads against fresh keys).
+
+All 12 tasks done — see `plans/2026-05-05-data-generator-plan-11-opentelemetry.md`.
+Opens follow-ups F12 (`tx_commit`/`tx_rollback` emission) and F13 (plugin
+endpoint inheritance).
 
 ## Plan 10 — State Persistence *(complete)*
 
@@ -236,24 +292,13 @@ All 9 tasks done — see `plans/2026-05-03-data-generator-plan-7-gg9-kv-target.m
 Live-cluster GG9 smoke is now unblocked (Plan 7.5 closed F8); pending operator
 bring-up of a GG9 cluster.
 
-## Remaining Plans (not yet drafted)
+## Remaining Plans
 
-Each plan produces working, testable software on its own. Order is flexible.
-
-### Plan 9 — Provisioning Emit + Apply
-Per spec §4. Generates GG8 cache config XML and GG9 SQL DDL from `data.yaml`
-schemas; optionally applies them to the cluster. Closes follow-up F6
-(TRANSACTIONAL cache mode). `affinity: true` column annotation finally consumed
-here. Two artifact formats:
-- GG8 — cache `<bean>` XML with `affinityKey` and `atomicityMode`.
-- GG9 — SQL `CREATE ZONE` + `CREATE TABLE … COLOCATE BY (...)`.
-
-### Plan 11 — OpenTelemetry
-Per spec §7. Instrument the runner with OTel histograms (`data_generator.op.latency`),
-counters (`op.count`, `op.errors`), gauges (`in_flight`, `target_rate`,
-`observed_rate`), and lifecycle log events. Single registration point so the
-instrument list is owned in one place. Optional `otel: { exporter, endpoint }`
-block in `ops.yaml`.
+No remaining plans drafted in spec §1–§11. Future direction lives in
+spec §12 (Future Work — per-scenario read-skew override, compute-task
+workloads, pluggable transaction-scope policies, end-user JVM custom
+providers, multi-cluster targeting, etc.) and is intentionally
+unscheduled.
 
 ---
 
