@@ -37,7 +37,7 @@ class ScenarioRunnerCliVersionMismatchTest {
         assertThatThrownBy { ScenarioRunnerCli.run(args, resolution, target, logger) }
             .isInstanceOf(CorruptedStateException::class.java)
             .hasMessageContaining("schema_version=999")
-            .hasMessageContaining("expects 1")
+            .hasMessageContaining("expects 2")
             .hasMessageContaining("Tear down")
             .hasMessageContaining("does not support migration")
             .hasMessageContaining("matches the plugin's `deployment.yaml` rule")

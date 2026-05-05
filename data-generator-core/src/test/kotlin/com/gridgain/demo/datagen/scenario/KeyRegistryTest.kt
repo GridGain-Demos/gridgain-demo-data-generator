@@ -1,6 +1,7 @@
 package com.gridgain.demo.datagen.scenario
 
 import com.gridgain.demo.datagen.state.KeyRegistryState
+import com.gridgain.demo.datagen.state.KeyType
 import org.assertj.core.api.Assertions.assertThat
 import java.util.Random
 import kotlin.test.Test
@@ -60,9 +61,9 @@ class KeyRegistryTest {
             .containsExactly("o-100")
     }
 
-    @Test fun `restore populates registry from a saved list`() {
+    @Test fun `restore populates registry from a saved list (STRING)`() {
         val r = KeyRegistry()
-        r.restore(listOf(KeyRegistryState("customer", listOf("1", "2", "3"))))
+        r.restore(listOf(KeyRegistryState("customer", KeyType.STRING, listOf("1", "2", "3"))))
         assertThat(r.size("customer")).isEqualTo(3)
         val rng = Random(0L)
         assertThat(r.sample("customer", rng)).isIn("1", "2", "3")
@@ -71,7 +72,52 @@ class KeyRegistryTest {
     @Test fun `restore does not duplicate already-registered keys`() {
         val r = KeyRegistry()
         r.register("customer", "1")
-        r.restore(listOf(KeyRegistryState("customer", listOf("1", "2"))))
+        r.restore(listOf(KeyRegistryState("customer", KeyType.STRING, listOf("1", "2"))))
         assertThat(r.size("customer")).isEqualTo(2)
+    }
+
+    @Test fun `snapshot infers LONG keyType for Long keys`() {
+        val r = KeyRegistry()
+        r.register("customer", 1L)
+        r.register("customer", 2L)
+        val snap = r.snapshot()
+        assertThat(snap).hasSize(1)
+        assertThat(snap[0].keyType).isEqualTo(KeyType.LONG)
+        assertThat(snap[0].keys).containsExactly("1", "2")
+    }
+
+    @Test fun `snapshot infers STRING keyType for String keys`() {
+        val r = KeyRegistry()
+        r.register("order", "abc")
+        val snap = r.snapshot()
+        assertThat(snap[0].keyType).isEqualTo(KeyType.STRING)
+        assertThat(snap[0].keys).containsExactly("abc")
+    }
+
+    @Test fun `restore coerces LONG keys back to Long so sample matches the original type`() {
+        val r = KeyRegistry()
+        r.restore(listOf(KeyRegistryState("customer", KeyType.LONG, listOf("1", "2", "3"))))
+        val sampled = r.sample("customer", Random(0L))
+        assertThat(sampled).isInstanceOf(java.lang.Long::class.java)
+        assertThat(sampled).isIn(1L, 2L, 3L)
+    }
+
+    @Test fun `snapshot rejects unsupported key types with remediation`() {
+        val r = KeyRegistry()
+        r.register("widget", 3.14) // Double — not wired
+        val ex = org.junit.jupiter.api.Assertions.assertThrows(
+            com.gridgain.demo.datagen.errors.MisconfigurationException::class.java,
+        ) { r.snapshot() }
+        assertThat(ex.message).contains("widget").contains("Long").contains("String")
+    }
+
+    @Test fun `restore fails fast with remediation when LONG key is unparseable`() {
+        val r = KeyRegistry()
+        val ex = org.junit.jupiter.api.Assertions.assertThrows(
+            com.gridgain.demo.datagen.errors.MisconfigurationException::class.java,
+        ) {
+            r.restore(listOf(KeyRegistryState("customer", KeyType.LONG, listOf("not-a-number"))))
+        }
+        assertThat(ex.message).contains("not-a-number").contains("tear down")
     }
 }

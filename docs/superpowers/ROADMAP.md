@@ -3,13 +3,13 @@
 Durable record of in-flight work, deferred follow-ups, and remaining plans for
 `gridgain-demo-data-generator`. Survives Claude Code session boundaries.
 
-Last updated: 2026-05-05 (after Plan 11 — OpenTelemetry)
+Last updated: 2026-05-05 (after F11 closure — KeyRegistry type fidelity)
 
 ---
 
 ## Current State
 
-Plans 1–11 implemented. **208 tests pass** (200 unit + 8 env-gated integration)
+Plans 1–11 implemented. **217 tests pass** (209 unit + 8 env-gated integration)
 across three subprojects: `data-generator-core` (config, generators,
 scenario, output, provisioning plan factory, observability), `data-generator-gg8`
 (`Gg8KvTarget` + `Gg8XmlProvisioner` with env-gated integration tests),
@@ -75,18 +75,6 @@ defaults but a future plan should:
 (a) infer from the runtime type of `WeightedChoiceSpec.choices[0].value`,
 (b) parameterize VARCHAR length per column,
 (c) extend `SqlType` to cover timestamp / decimal / numeric.
-
-### F11 — `KeyRegistry` persisted-key type fidelity
-*Source: Plan 10 Task 5 design note.*
-`KeyRegistry.snapshot()` round-trips keys through `Any.toString()` for
-JSON-safety, so a `Long` key like `1L` comes back as `String("1")` after a
-restart. `KeyRegistry.sample(...)` then returns `String("1")`, which targets
-that read against a string key while the cache (or table) was keyed by
-`Long`. Today this only matters for `read_ratio > 0` after a restart; the
-write path is unaffected. Future fix: persist a `keyType` discriminator per
-schema and reverse-coerce on `restore`, OR store keys as Jackson polymorphic
-values. Spec §13 verification step 7 (restart-then-read) should add a test
-for this.
 
 ### F12 — `tx_commit` / `tx_rollback` op type emission
 *Source: Plan 11 Task 7 design note.*
@@ -161,6 +149,15 @@ New `MultiFkToSameParentValidator` rejects schemas with two or more
 `parent-fk-ref` columns pointing at the same parent. Multi-FK to *different*
 parents stays valid. Wired into `CompositeCrossElementValidator` between
 `NullRateOnRelationColumnValidator` and `CohortBucketSharesValidator`.
+
+### F11 — `KeyRegistry` persisted-key type fidelity ✅ *(closed 2026-05-05)*
+`KeyRegistryState` gained a `keyType` discriminator (`LONG | STRING`).
+`KeyRegistry.snapshot` infers the type from runtime keys (per-schema
+homogeneity enforced); `restore` coerces yaml strings back via
+`String.toLong()` for LONG, leaves STRING as-is. `state.yaml`
+`schema_version` bumped 1 → 2 — no migration; v1 files fail-load with
+remediation per spec §6. Added spec §13 step 7 restart-then-read test
+(`ScenarioRunnerCliRestartReadTest`) confirming `Long` round-trip.
 
 ---
 

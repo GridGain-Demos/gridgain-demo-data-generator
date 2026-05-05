@@ -13,7 +13,7 @@ class GeneratorStateRoundTripTest {
         val original = GeneratorState(
             schemaVersion = CURRENT_STATE_SCHEMA_VERSION,
             sequences = listOf(SequenceState("customer", "id", 4201)),
-            keys = listOf(KeyRegistryState("customer", listOf("1", "2", "3"))),
+            keys = listOf(KeyRegistryState("customer", KeyType.LONG, listOf("1", "2", "3"))),
             runHistory = listOf(RunHistoryEntry(
                 runId = "20260504-091215-x9k3pa",
                 scenarioName = "customer-load",
@@ -23,8 +23,9 @@ class GeneratorStateRoundTripTest {
             )),
         )
         val yaml = mapper.writeValueAsString(original)
-        assertThat(yaml).contains("schema_version: 1", "schema_name: \"customer\"",
+        assertThat(yaml).contains("schema_version: 2", "schema_name: \"customer\"",
                                  "column_name: \"id\"", "next_value: 4201",
+                                 "key_type: \"LONG\"",
                                  "run_id:", "started_at:", "stop_reason:")
         assertThat(mapper.readValue(yaml, GeneratorState::class.java)).isEqualTo(original)
     }

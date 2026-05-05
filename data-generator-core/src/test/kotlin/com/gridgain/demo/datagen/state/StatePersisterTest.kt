@@ -14,7 +14,7 @@ class StatePersisterTest {
     private fun sample(version: Int = CURRENT_STATE_SCHEMA_VERSION) = GeneratorState(
         schemaVersion = version,
         sequences = listOf(SequenceState("customer", "id", 17)),
-        keys = listOf(KeyRegistryState("customer", listOf("1", "2"))),
+        keys = listOf(KeyRegistryState("customer", KeyType.LONG, listOf("1", "2"))),
         runHistory = listOf(
             RunHistoryEntry(
                 runId = "20260504-091215-x9k3pa",
