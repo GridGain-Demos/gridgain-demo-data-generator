@@ -13,5 +13,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 data class OpsConfig(
     @JsonProperty("schema_version") val schemaVersion: Int,
     val targets: List<TargetSpec> = emptyList(),
+    val otel: OtelSpec = OtelSpec.NONE,
     val scenarios: List<ScenarioSpec>,
 )

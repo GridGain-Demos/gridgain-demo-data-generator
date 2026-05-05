@@ -8,7 +8,8 @@
   "properties": {
     "schema_version": { "const": 2 },
     "scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } },
-    "targets": { "type": "array", "items": { "$ref": "#/$defs/target" } }
+    "targets": { "type": "array", "items": { "$ref": "#/$defs/target" } },
+    "otel": { "$ref": "#/$defs/otel" }
   },
   "$defs": {
     "scenario": {
@@ -133,6 +134,16 @@
         "kind": { "const": "gg9-kv" },
         "name": { "type": "string", "minLength": 1 },
         "cluster_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "otel": {
+      "type": "object",
+      "required": ["exporter"],
+      "additionalProperties": false,
+      "properties": {
+        "exporter": { "enum": ["none", "otlp", "prometheus"], "default": "none" },
+        "endpoint": { "type": "string", "minLength": 1 },
+        "attributes": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     }
   }
