@@ -97,6 +97,32 @@ class NullRateOnRelationColumnValidator : CrossElementValidator {
     }
 }
 
+/**
+ * A schema with two `parent-fk-ref` columns pointing at the same parent has ambiguous
+ * cohort semantics — `BusinessEventGenerator` would silently honor only the first column's
+ * cohort buckets. Reject explicitly so users get a remediation message instead of
+ * surprising distributions at runtime. Multi-FK to *different* parents is fine.
+ */
+class MultiFkToSameParentValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        for (schema in data.schemas) {
+            val byParent = schema.columns
+                .filter { it.valueSource is ParentFkRefSpec }
+                .groupBy { (it.valueSource as ParentFkRefSpec).parentSchema }
+            for ((parent, columns) in byParent) {
+                if (columns.size > 1) {
+                    errors += "schema '${schema.name}' has ${columns.size} parent-fk-ref columns " +
+                        "(${columns.joinToString(", ") { it.name }}) pointing at parent '$parent'. " +
+                        "BusinessEventGenerator would only honor the first column's cohort buckets — " +
+                        "either remove the duplicates or split the relations across distinct parents."
+                }
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}
+
 class CohortBucketSharesValidator : CrossElementValidator {
     override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
         val errors = mutableListOf<String>()

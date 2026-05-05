@@ -58,14 +58,6 @@ stop_reason: count reached`.
 These are tracked work items, not full plans. Each is small and can be picked
 up in any order.
 
-### F4 — `BusinessEventGenerator` multi-FK silent first-wins
-*Source: Plan 3 final review.*
-If a child schema has two `parent-fk-ref` columns pointing to the same parent
-(syntactically valid), only the first column's cohort buckets are honored.
-Either add a validator rejecting multi-FK-to-same-parent, or document the
-first-wins semantics explicitly.
-
-
 ### F7 — `ScenarioTargetValidator` softness when `ops.targets` empty
 *Source: Plan 6 final review.*
 The validator unconditionally rejects `target = ""` for every scenario. Today
@@ -163,6 +155,12 @@ graceful even if a misbehaving `Random` reaches `totalWeight`.
 mirroring `KeySuffixValueSource`. Two yaml-backed columns in the same
 schema no longer draw identical sequences. `WeightedChoiceValueSource`
 got the same per-column decorrelation as a defensive bonus.
+
+### F4 — `BusinessEventGenerator` multi-FK silent first-wins ✅ *(closed 2026-05-05)*
+New `MultiFkToSameParentValidator` rejects schemas with two or more
+`parent-fk-ref` columns pointing at the same parent. Multi-FK to *different*
+parents stays valid. Wired into `CompositeCrossElementValidator` between
+`NullRateOnRelationColumnValidator` and `CohortBucketSharesValidator`.
 
 ---
 

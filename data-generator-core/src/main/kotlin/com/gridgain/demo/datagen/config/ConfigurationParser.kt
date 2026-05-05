@@ -18,6 +18,7 @@ class ConfigurationParser(
             ColumnUniquenessValidator(),
             RelationReferentialValidator(),
             NullRateOnRelationColumnValidator(),
+            MultiFkToSameParentValidator(),
             CohortBucketSharesValidator(),
             ScenarioRootSchemaValidator(),
             ScenarioTargetValidator(),
