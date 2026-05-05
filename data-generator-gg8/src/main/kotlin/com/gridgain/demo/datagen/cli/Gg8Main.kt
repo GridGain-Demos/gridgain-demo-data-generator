@@ -4,6 +4,7 @@ package com.gridgain.demo.datagen.cli
 import com.gridgain.demo.datagen.config.Gg8KvTargetSpec
 import com.gridgain.demo.datagen.config.ProvisioningMode
 import com.gridgain.demo.datagen.errors.MisconfigurationException
+import com.gridgain.demo.datagen.observability.LifecycleEvent
 import com.gridgain.demo.datagen.output.OutputLayout
 import com.gridgain.demo.datagen.provisioning.Gg8XmlProvisioner
 import com.gridgain.demo.datagen.provisioning.ProvisioningOutcome
@@ -44,6 +45,13 @@ fun main(args: Array<String>) {
             }
             logger.lifecycle("gg8 provisioning ($mode) ok: artifacts=${outcome.artifactsWritten.size} " +
                 "created=${outcome.cachesOrTablesCreated.size} existed=${outcome.cachesOrTablesAlreadyExisted.size}")
+            resolution.pendingEvents.add(LifecycleEvent.ProvisioningApplied(
+                flavor = "gg8",
+                mode = mode.name.lowercase(),
+                artifactsWritten = outcome.artifactsWritten.size,
+                createdCount = outcome.cachesOrTablesCreated.size,
+                existedCount = outcome.cachesOrTablesAlreadyExisted.size,
+            ))
         }
 
         val target = Gg8KvTarget(spec.clusterName, resolution.keyColumnByName, resolution.scenario.transactionScope)
