@@ -4,9 +4,10 @@ import com.gridgain.demo.datagen.generation.BusinessEvent
 
 data class ReadCall(val cacheName: String, val key: Any)
 
-class InMemoryTarget : Target {
-    override val supportsReads: Boolean = true
-    override val supportsTransactions: Boolean = false
+class InMemoryTarget(
+    override val supportsReads: Boolean = true,
+    override val supportsTransactions: Boolean = false,
+) : Target {
 
     private val _writes: MutableList<BusinessEvent> = mutableListOf()
     val writes: List<BusinessEvent> get() = _writes

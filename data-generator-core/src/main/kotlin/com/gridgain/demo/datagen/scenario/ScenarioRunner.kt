@@ -12,6 +12,7 @@ import com.gridgain.demo.datagen.config.UntilStopDurationSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
+import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.state.KeyRegistryState
 import com.gridgain.demo.datagen.target.Target
 import java.time.Duration
@@ -26,7 +27,12 @@ class ScenarioRunner(
     private val untilStopCap: Duration = Duration.ofMinutes(1),
     private val decisionRandom: Random = Random(),
     private val keyRegistry: KeyRegistry = KeyRegistry(),
+    private val instruments: Instruments = Instruments.noop(),
+    private val targetName: String = "<unknown>",
 ) {
+
+    private var totalAttempts: Long = 0L
+    private var startedNanos: Long = 0L
     /** Captures the post-run registry contents for `state.yaml`. Safe to call multiple times. */
     fun keyRegistrySnapshot(): List<KeyRegistryState> = keyRegistry.snapshot()
 
@@ -42,6 +48,14 @@ class ScenarioRunner(
     fun run(): ScenarioResult {
         val rateLimiter = buildRateLimiter()
         val evaluator = StopConditionEvaluator(scenario.stopConditions)
+        val configuredRate: Double = when (val r = scenario.rate) {
+            is ConstantRateSpec -> r.opsPerSecond
+            is RampedRateSpec -> r.from
+            is SteppedRateSpec -> r.steps.first().rate
+        }
+        instruments.targetRateRef.set(configuredRate)
+        totalAttempts = 0L
+        startedNanos = System.nanoTime()
         val started = Instant.now()
         var success = 0L
         var error = 0L
@@ -99,27 +113,44 @@ class ScenarioRunner(
             target.supportsReads &&
             decisionRandom.nextDouble() < scenario.readRatio &&
             keyRegistry.size(rootSchemaName) > 0
+        val op = if (isRead) "get" else "put"
+        val attrs = instruments.opAttributes(scenario.name, targetName, rootSchemaName, op)
 
+        instruments.inFlight.add(1, attrs)
         val t0 = System.nanoTime()
-        val success = if (isRead) {
-            val key = keyRegistry.sample(rootSchemaName, decisionRandom)!!
-            target.read(rootSchemaName, key).success
-        } else {
-            val event = generator.next()
-            val rootSchema = schemasByName[rootSchemaName]!!
-            val finalEvent = maybeApplyUpdate(event, rootSchema, rootKeyColumn)
-            // Register the (possibly substituted) parent key for future updates/reads.
-            val parentKey = finalEvent.parentRow[rootKeyColumn]!!
-            keyRegistry.register(rootSchemaName, parentKey)
-            // Register children's keys too.
-            finalEvent.childrenBySchema.forEach { (childSchema, rows) ->
-                val childKeyColumn = keyColumnByName[childSchema] ?: return@forEach
-                rows.forEach { row -> row[childKeyColumn]?.let { keyRegistry.register(childSchema, it) } }
+        val success: Boolean = try {
+            if (isRead) {
+                val key = keyRegistry.sample(rootSchemaName, decisionRandom)!!
+                target.read(rootSchemaName, key).success
+            } else {
+                val event = generator.next()
+                val rootSchema = schemasByName[rootSchemaName]!!
+                val finalEvent = maybeApplyUpdate(event, rootSchema, rootKeyColumn)
+                val parentKey = finalEvent.parentRow[rootKeyColumn]!!
+                keyRegistry.register(rootSchemaName, parentKey)
+                finalEvent.childrenBySchema.forEach { (childSchema, rows) ->
+                    val childKeyColumn = keyColumnByName[childSchema] ?: return@forEach
+                    rows.forEach { row -> row[childKeyColumn]?.let { keyRegistry.register(childSchema, it) } }
+                }
+                target.write(finalEvent).success
             }
-            target.write(finalEvent).success
+        } catch (e: Exception) {
+            instruments.opErrors.add(1, attrs.toBuilder()
+                .put(Instruments.ATTR_EXCEPTION, e.javaClass.simpleName).build())
+            false
+        } finally {
+            instruments.inFlight.add(-1, attrs)
         }
         val latencyNanos = System.nanoTime() - t0
+        instruments.opLatency.record(latencyNanos.toDouble(), attrs)
+        instruments.opCount.add(1, attrs)
+        if (!success) instruments.opErrors.add(1, attrs.toBuilder()
+            .put(Instruments.ATTR_EXCEPTION, "TargetReportedFailure").build())
         evaluator.recordOutcome(success = success, latencyNanos = latencyNanos)
+
+        totalAttempts++
+        val elapsedSec = (System.nanoTime() - startedNanos) / 1_000_000_000.0
+        if (elapsedSec > 0) instruments.observedRateRef.set(totalAttempts / elapsedSec)
         return success
     }
 
