@@ -73,3 +73,9 @@ subprojects {
         }
     }
 }
+
+tasks.register("publishStandardImages") {
+    group = "publishing"
+    description = "Build the data-generator images via jib and push to the registry specified by -PimageRegistry (default: ghcr.io/gridgain-demos). Credentials come from -PgridgainGhcrUsername / -PgridgainGhcrPassword."
+    dependsOn(":data-generator-gg8-image:jib", ":data-generator-gg9-image:jib")
+}

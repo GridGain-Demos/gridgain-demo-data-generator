@@ -22,4 +22,6 @@ include(
     ":data-generator-core",
     ":data-generator-gg8",
     ":data-generator-gg9",
+    ":data-generator-gg8-image",
+    ":data-generator-gg9-image",
 )
