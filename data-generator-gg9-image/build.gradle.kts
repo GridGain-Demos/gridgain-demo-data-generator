@@ -15,6 +15,11 @@ description = "OCI image build for the GG9 data generator"
 
 dependencies {
     implementation(project(":data-generator-gg9"))
+    // SLF4J binding for the container runtime. Without this, slf4j-api falls back
+    // to its NOP provider, prints a diagnostic warning, and silently drops every
+    // LOG.info(...) call from the data generator. slf4j-simple writes to stderr at
+    // INFO level by default — exactly what `kubectl logs -f` picks up.
+    runtimeOnly("org.slf4j:slf4j-simple:2.0.13")
 }
 
 // Default registry: the public GridGain-Demos GHCR org. End users pull from here;
