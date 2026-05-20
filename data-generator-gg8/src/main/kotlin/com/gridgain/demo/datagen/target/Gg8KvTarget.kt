@@ -147,18 +147,22 @@ class Gg8KvTarget(
      * fail fast on an unreachable cluster instead of waiting on the kernel's default TCP
      * retry budget (~minutes).
      *
-     * Skips `*.svc.cluster.local` addresses — `DemoAddressFinder` returns both `local` and
-     * `in_cluster` contexts; the cluster.local ones are only resolvable from inside the
-     * target k8s cluster and would always time out from a developer laptop or CI runner.
+     * `*.svc.cluster.local` addresses are filtered ONLY when running outside Kubernetes —
+     * `DemoAddressFinder` returns both `local` and `in_cluster` contexts, and the
+     * cluster.local ones are unresolvable from a developer laptop or CI runner. When the
+     * data generator runs as a Job inside the cluster (the plugin's in-cluster mode),
+     * the cluster.local addresses are the only routable ones, so we keep them.
      */
     private fun probeReachability(addresses: Array<String>, clusterName: String) {
-        val routable = addresses.filter { !it.contains(".svc.cluster.local") }
+        val inCluster = System.getenv("KUBERNETES_SERVICE_HOST") != null
+        val routable = if (inCluster) addresses.toList()
+        else addresses.filter { !it.contains(".svc.cluster.local") }
         if (routable.isEmpty()) {
             throw MisconfigurationException(
                 "Gg8KvTarget: DemoAddressFinder returned no routable addresses for cluster '$clusterName' " +
-                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}). " +
+                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}; in-cluster=$inCluster). " +
                 "Verify client-endpoints.yaml has a clusters[].name entry matching '$clusterName' " +
-                "and that the local context's addresses are populated."
+                "and that the appropriate context's addresses are populated."
             )
         }
         val failures = mutableListOf<String>()

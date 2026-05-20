@@ -71,15 +71,21 @@ class Gg9SqlProvisioner(
     /**
      * Pre-probe TCP reachability. Returns a `ProvisioningOutcome` populated with a single
      * error string if every address fails the 10s probe, or `null` to proceed.
+     *
+     * `*.svc.cluster.local` addresses are filtered ONLY when running outside Kubernetes —
+     * when the data generator runs as a Job inside the cluster (the plugin's in-cluster
+     * mode), the cluster.local addresses are the only routable ones.
      */
     private fun probeReachability(addresses: Array<String>, clusterName: String): ProvisioningOutcome? {
-        val routable = addresses.filter { !it.contains(".svc.cluster.local") }
+        val inCluster = System.getenv("KUBERNETES_SERVICE_HOST") != null
+        val routable = if (inCluster) addresses.toList()
+        else addresses.filter { !it.contains(".svc.cluster.local") }
         if (routable.isEmpty()) {
             return ProvisioningOutcome(emptyList(), emptyList(), emptyList(), listOf(
                 "Gg9SqlProvisioner: DemoAddressFinder returned no routable addresses for cluster '$clusterName' " +
-                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}). " +
+                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}; in-cluster=$inCluster). " +
                 "Verify client-endpoints.yaml has a clusters[].name entry matching '$clusterName' " +
-                "and that the local context's addresses are populated."
+                "and that the appropriate context's addresses are populated."
             ))
         }
         val failures = mutableListOf<String>()

@@ -8,8 +8,11 @@ import com.gridgain.demo.client.gg9.DemoAddressFinder
 import org.apache.ignite.client.IgniteClient
 import org.apache.ignite.table.Tuple
 import org.apache.ignite.tx.Transaction
+import org.slf4j.LoggerFactory
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * GG9 KV target. Lazily opens an `IgniteClient` on first `write` or `read` call.
@@ -35,6 +38,12 @@ class Gg9KvTarget(
     /** Cached fatal connection failure — see Gg8KvTarget for the rationale (avoids
      *  re-probing on every write when the cluster is unreachable). */
     @Volatile private var fatalConnectFailure: MisconfigurationException? = null
+
+    /** Per-exception-class WARN-log de-dupe: log the first occurrence in full, then
+     *  count repeats. Without this the per-op error path is opaque to anyone running
+     *  the generator without an OTel exporter (the metric counter tags exception
+     *  class but nothing surfaces it to stderr/stdout). */
+    private val warnedClasses: MutableMap<String, AtomicLong> = ConcurrentHashMap()
 
     private fun ensureClient(): IgniteClient {
         val existing = client
@@ -78,6 +87,7 @@ class Gg9KvTarget(
         val ignite = try {
             ensureClient()
         } catch (e: Exception) {
+            warnOnce(e, "connect to cluster '$clusterName'")
             // Pre-tx failure — never started a transaction, so NONE.
             return WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.NONE)
         }
@@ -88,6 +98,7 @@ class Gg9KvTarget(
                 }
                 WriteOutcome(success = true, transactionOutcome = TransactionOutcome.COMMITTED)
             } catch (e: Exception) {
+                warnOnce(e, "transactional write for schema '${event.parentSchemaName}'")
                 // GG9's runInTransaction auto-rolls-back when its lambda throws; the
                 // exception propagates here. Tag as ROLLED_BACK so the runner emits the
                 // tx_rollback metric.
@@ -98,8 +109,19 @@ class Gg9KvTarget(
                 putAllForEvent(ignite, tx = null, event = event)
                 WriteOutcome(success = true, transactionOutcome = TransactionOutcome.NONE)
             } catch (e: Exception) {
+                warnOnce(e, "write for schema '${event.parentSchemaName}'")
                 WriteOutcome(success = false, error = e, transactionOutcome = TransactionOutcome.NONE)
             }
+        }
+    }
+
+    private fun warnOnce(e: Throwable, context: String) {
+        val key = e.javaClass.name
+        val count = warnedClasses.computeIfAbsent(key) { AtomicLong(0) }.incrementAndGet()
+        if (count == 1L) {
+            // First sighting of this exception class — log full message + stack so the
+            // user can root-cause. Subsequent occurrences are counted but not re-logged.
+            LOG.warn("Gg9KvTarget $context failed (${e.javaClass.simpleName}): ${e.message}", e)
         }
     }
 
@@ -129,7 +151,8 @@ class Gg9KvTarget(
         )
         val table = ignite.tables().table(schemaName) ?: throw IllegalStateException(
             "GG9 table '$schemaName' does not exist in the cluster. " +
-            "Pre-create the table or run with provisioning (Plan 9, deferred)."
+            "Pre-create the table (apply the SQL emitted to /<demoOutputDirectory>/data-generator/provisioning/) " +
+            "or change ops.yaml's scenario provisioning to 'apply' so the generator creates it on startup."
         )
         val keyTuple = Tuple.create().set(keyColumn, keyValue)
         val valueTuple = Tuple.create()
@@ -168,15 +191,23 @@ class Gg9KvTarget(
      * Probes each `host:port` with a manual `Socket.connect(addr, timeout)` and throws
      * `MisconfigurationException` with remediation if every probe fails. Symmetric with
      * `Gg8KvTarget.probeReachability`.
+     *
+     * `*.svc.cluster.local` addresses are filtered ONLY when running outside Kubernetes —
+     * `DemoAddressFinder` returns both `local` and `in_cluster` contexts, and the
+     * cluster.local ones would always time out from a developer laptop. When the data
+     * generator runs as a Job inside the cluster (the plugin's in-cluster mode), the
+     * cluster.local addresses are the only routable ones, so we keep them.
      */
     private fun probeReachability(addresses: Array<String>, clusterName: String) {
-        val routable = addresses.filter { !it.contains(".svc.cluster.local") }
+        val inCluster = System.getenv("KUBERNETES_SERVICE_HOST") != null
+        val routable = if (inCluster) addresses.toList()
+        else addresses.filter { !it.contains(".svc.cluster.local") }
         if (routable.isEmpty()) {
             throw MisconfigurationException(
                 "Gg9KvTarget: DemoAddressFinder returned no routable addresses for cluster '$clusterName' " +
-                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}). " +
+                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}; in-cluster=$inCluster). " +
                 "Verify client-endpoints.yaml has a clusters[].name entry matching '$clusterName' " +
-                "and that the local context's addresses are populated."
+                "and that the appropriate context's addresses are populated."
             )
         }
         val failures = mutableListOf<String>()
@@ -199,6 +230,8 @@ class Gg9KvTarget(
     }
 
     private companion object {
+        private val LOG = LoggerFactory.getLogger(Gg9KvTarget::class.java)
+
         /** Per-address TCP probe timeout (3s — matches GG8 path). */
         const val PROBE_TIMEOUT_MS: Int = 3_000
 

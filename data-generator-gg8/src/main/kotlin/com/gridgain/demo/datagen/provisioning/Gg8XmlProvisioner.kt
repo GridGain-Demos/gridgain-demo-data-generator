@@ -87,13 +87,15 @@ class Gg8XmlProvisioner(
      * `Ignition.startClient` may proceed.
      */
     private fun probeReachability(addresses: Array<String>, clusterName: String): ProvisioningOutcome? {
-        val routable = addresses.filter { !it.contains(".svc.cluster.local") }
+        val inCluster = System.getenv("KUBERNETES_SERVICE_HOST") != null
+        val routable = if (inCluster) addresses.toList()
+        else addresses.filter { !it.contains(".svc.cluster.local") }
         if (routable.isEmpty()) {
             return ProvisioningOutcome(emptyList(), emptyList(), emptyList(), listOf(
                 "Gg8XmlProvisioner: DemoAddressFinder returned no routable addresses for cluster '$clusterName' " +
-                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}). " +
+                "(received: ${addresses.joinToString(", ").ifBlank { "(none)" }}; in-cluster=$inCluster). " +
                 "Verify client-endpoints.yaml has a clusters[].name entry matching '$clusterName' " +
-                "and that the local context's addresses are populated."
+                "and that the appropriate context's addresses are populated."
             ))
         }
         val failures = mutableListOf<String>()
