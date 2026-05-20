@@ -31,8 +31,11 @@ class Gg9SqlDdlRenderer {
             if (d.affinityColumn != null && d.affinityColumn != d.keyColumn) add(d.affinityColumn)
         }
         append("    PRIMARY KEY (${pkCols.joinToString(", ")})\n")
-        append(") ZONE gg_demo_zone")
+        append(")")
+        // GG9 syntax requires COLOCATE BY to precede ZONE; reversing them produces
+        // "Failed to parse query: Encountered \"COLOCATE\"...".
         if (d.affinityColumn != null) append(" COLOCATE BY (${d.affinityColumn})")
+        append(" ZONE gg_demo_zone")
         append(";")
     }
 }

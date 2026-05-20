@@ -35,7 +35,7 @@ class Gg9SqlDdlRendererTest {
                 customer_id BIGINT NOT NULL,
                 id VARCHAR(256) NOT NULL,
                 PRIMARY KEY (id, customer_id)
-            ) ZONE gg_demo_zone COLOCATE BY (customer_id);
+            ) COLOCATE BY (customer_id) ZONE gg_demo_zone;
             """.trimIndent()
         )
     }
