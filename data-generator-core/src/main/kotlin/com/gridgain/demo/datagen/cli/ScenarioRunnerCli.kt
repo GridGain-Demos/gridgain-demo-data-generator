@@ -7,6 +7,7 @@ import com.gridgain.demo.datagen.config.OtelSpec
 import com.gridgain.demo.datagen.config.ParsedConfiguration
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.TargetSpec
+import com.gridgain.demo.datagen.coordinator.Coordinator
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
@@ -25,6 +26,7 @@ import com.gridgain.demo.datagen.state.GeneratorState
 import com.gridgain.demo.datagen.state.RunHistoryEntry
 import com.gridgain.demo.datagen.state.StatePersister
 import com.gridgain.demo.datagen.target.Target
+import io.fabric8.kubernetes.client.KubernetesClientBuilder
 import io.opentelemetry.api.OpenTelemetry
 import net.datafaker.Faker
 import org.slf4j.LoggerFactory
@@ -39,13 +41,29 @@ object ScenarioRunnerCli {
         val keyColumnByName: Map<String, String>,
         val openTelemetry: OpenTelemetry,
         val instruments: Instruments,
+        /**
+         * Distributed-mode orchestrator. Non-null when the scenario declares a `distribution:`
+         * block AND the process is running in-cluster (POD_NAME / POD_NAMESPACE present in
+         * the env). Null for single-pod scenarios and for local dev runs of a distributed
+         * scenario.
+         */
+        val coordinator: Coordinator?,
         val pendingEvents: MutableList<LifecycleEvent> = mutableListOf(),
     )
+
+    /** Factory hook: tests inject a stub to bypass the real K8s client. */
+    fun interface CoordinatorFactory {
+        fun build(scenario: ScenarioSpec, env: (String) -> String?, logger: DataGenLogger): Coordinator?
+    }
 
     fun defaultLogger(): DataGenLogger =
         Slf4jDataGenLogger(LoggerFactory.getLogger("datagen-cli"))
 
-    fun resolve(parsed: CliArgs, logger: DataGenLogger): Resolution {
+    fun resolve(
+        parsed: CliArgs,
+        logger: DataGenLogger,
+        coordinatorFactory: CoordinatorFactory = DefaultCoordinatorFactory,
+    ): Resolution {
         System.setProperty("gg.demo.client.endpoints", parsed.clusterEndpoints.toAbsolutePath().toString())
 
         val parser = ConfigurationParser(logger = logger)
@@ -70,6 +88,7 @@ object ScenarioRunnerCli {
         val effectiveOtelSpec = applyEndpointOverride(parsedConfig.ops.otel, parsed.otelEndpointOverride, logger)
         val openTelemetry = OtelInitializer.fromSpec(effectiveOtelSpec, logger)
         val instruments = Instruments(openTelemetry)
+        val coordinator = coordinatorFactory.build(scenario, System::getenv, logger)
 
         return Resolution(
             parsedConfig = parsedConfig,
@@ -78,7 +97,44 @@ object ScenarioRunnerCli {
             keyColumnByName = keyColumnByName,
             openTelemetry = openTelemetry,
             instruments = instruments,
+            coordinator = coordinator,
         )
+    }
+
+    /**
+     * Default [CoordinatorFactory]. Returns a Coordinator only when both conditions hold:
+     * 1. The scenario declares a `distribution:` block (multi-pod mode requested).
+     * 2. POD_NAME and POD_NAMESPACE env vars are set (we're running inside a k8s Pod
+     *    that was launched via the data-generator-distributed Deployment manifest).
+     *
+     * Local-laptop runs of a scenario that happens to have `distribution:` configured will
+     * log a warning and run in single-pod mode rather than failing the run; this matches
+     * how `--otel-endpoint-override` behaves when its prerequisite is missing.
+     */
+    internal object DefaultCoordinatorFactory : CoordinatorFactory {
+        override fun build(
+            scenario: ScenarioSpec, env: (String) -> String?, logger: DataGenLogger,
+        ): Coordinator? {
+            val distribution = scenario.distribution ?: return null
+            val podName = env("POD_NAME")
+            val podNamespace = env("POD_NAMESPACE")
+            if (podName.isNullOrBlank() || podNamespace.isNullOrBlank()) {
+                logger.warn(
+                    "scenario '${scenario.name}' declares distribution:{replicas=${distribution.replicas}, " +
+                        "partition_count=${distribution.partitionCount}} but POD_NAME/POD_NAMESPACE are unset. " +
+                        "Falling back to single-pod execution — set those env vars (k8s downward API) to enable " +
+                        "distributed mode."
+                )
+                return null
+            }
+            return Coordinator(
+                client = KubernetesClientBuilder().build(),
+                namespace = podNamespace,
+                scenarioName = scenario.name,
+                instanceId = podName,
+                partitionCount = distribution.partitionCount,
+            )
+        }
     }
 
     /**
@@ -118,6 +174,14 @@ object ScenarioRunnerCli {
         resolution.pendingEvents.clear()
 
         try {
+            resolution.coordinator?.let { coord ->
+                coord.start()
+                logger.lifecycle(
+                    "distributed mode: Coordinator started (scenario='${resolution.scenario.name}', " +
+                        "partition_count=${resolution.scenario.distribution?.partitionCount}). " +
+                        "Initial lease/assignment will settle within a few seconds."
+                )
+            }
             val persister = StatePersister()
             val loadedState: GeneratorState? = persister.load(layout.stateFile)
             if (loadedState != null) {
@@ -189,14 +253,21 @@ object ScenarioRunnerCli {
                     stopReason = result.stopReason,
                 ),
             )
-            persister.save(newState, layout.stateFile)
-
-            runLog.emit(LifecycleEvent.StatePersisted(
-                stateFile = layout.stateFile,
-                sequenceCount = newState.sequences.size,
-                keyCount = newState.keys.sumOf { it.keys.size },
-                runHistorySize = newState.runHistory.size,
-            ))
+            val coord = resolution.coordinator
+            if (coord == null || coord.isLeader()) {
+                StatePersister(writable = true).save(newState, layout.stateFile)
+                runLog.emit(LifecycleEvent.StatePersisted(
+                    stateFile = layout.stateFile,
+                    sequenceCount = newState.sequences.size,
+                    keyCount = newState.keys.sumOf { it.keys.size },
+                    runHistorySize = newState.runHistory.size,
+                ))
+            } else {
+                logger.lifecycle(
+                    "distributed mode (follower): skipping state persistence; the leader pod owns " +
+                        "the on-disk state.yaml write."
+                )
+            }
 
             logger.lifecycle(
                 "scenario '${resolution.scenario.name}' complete: ${result.successCount} successes, " +
@@ -208,6 +279,7 @@ object ScenarioRunnerCli {
 
             return result
         } finally {
+            runCatching { resolution.coordinator?.stop() }
             OtelInitializer.close(resolution.openTelemetry)
         }
     }
