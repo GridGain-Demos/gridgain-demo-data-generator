@@ -66,4 +66,26 @@ class StatePersisterTest {
         assertThat(Files.exists(dir.resolve("state.yaml.tmp"))).isFalse()
         assertThat(Files.exists(target)).isTrue()
     }
+
+    // In distributed mode only the leader persists state. Followers construct
+    // `StatePersister(writable = false)`; any attempt to save throws so the bug
+    // surfaces at the offending call site rather than producing torn writes.
+
+    @Test fun `follower-mode persister still loads existing state`(@TempDir dir: Path) {
+        val target = dir.resolve("state.yaml")
+        StatePersister(writable = true).save(sample(), target)
+        val loaded = StatePersister(writable = false).load(target)
+        assertThat(loaded).isEqualTo(sample())
+    }
+
+    @Test fun `follower-mode persister rejects save with remediation`(@TempDir dir: Path) {
+        val target = dir.resolve("state.yaml")
+        assertThatThrownBy { StatePersister(writable = false).save(sample(), target) }
+            .isInstanceOf(IllegalStateException::class.java)
+            .hasMessageContaining("read-only")
+            .hasMessageContaining("leader")
+        // No file should have been created.
+        assertThat(Files.exists(target)).isFalse()
+        assertThat(Files.exists(dir.resolve("state.yaml.tmp"))).isFalse()
+    }
 }

@@ -19,8 +19,12 @@ import java.nio.file.StandardCopyOption
  * `Files.move(... ATOMIC_MOVE, REPLACE_EXISTING)` swaps it in. If the
  * filesystem doesn't support atomic move, falls back to a non-atomic
  * `REPLACE_EXISTING` move.
+ *
+ * In distributed mode only the elected leader pod persists state. Worker pods
+ * construct this with `writable = false`; any [save] attempt fails fast so the
+ * mistake surfaces at the offending call site rather than producing torn writes.
  */
-class StatePersister {
+class StatePersister(private val writable: Boolean = true) {
 
     private val mapper: YAMLMapper = YAMLMapper().registerKotlinModule() as YAMLMapper
 
@@ -68,8 +72,15 @@ class StatePersister {
      * to exist (Plan 9 + F1 left `OutputLayout.ensureBaseDirectories` responsible
      * for that). Falls back to a non-atomic move if the filesystem rejects
      * `ATOMIC_MOVE`.
+     *
+     * Throws `IllegalStateException` if this persister was constructed read-only
+     * (worker pods in distributed mode). The leader is the sole writer.
      */
     fun save(state: GeneratorState, stateFile: Path) {
+        check(writable) {
+            "StatePersister is read-only on this pod (only the elected leader persists " +
+                "state in distributed mode). Refusing to save to '$stateFile'."
+        }
         val tmp = stateFile.resolveSibling(stateFile.fileName.toString() + ".tmp")
         mapper.writeValue(tmp.toFile(), state)
         try {

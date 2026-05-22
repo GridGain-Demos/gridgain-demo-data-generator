@@ -38,6 +38,15 @@ class Instruments(otel: OpenTelemetry) {
         const val ATTR_SCHEMA = "schema"
         const val ATTR_OP = "op"            // put | get | tx_commit | tx_rollback
         const val ATTR_EXCEPTION = "exception"
+        /** Per-tick partition id when running in distributed mode; absent in single-pod runs. */
+        const val ATTR_PARTITION = "partition"
+
+        // Coordinator-only metric names. Reserved here so the naming is documented in one
+        // place; the actual instruments are registered by the Coordinator class only while
+        // a pod holds the leader lease.
+        const val COORDINATOR_WORKER_COUNT = "data_generator.coordinator.worker_count"
+        const val COORDINATOR_PARTITION_ASSIGNMENTS = "data_generator.coordinator.partition_assignments"
+        const val COORDINATOR_REBALANCES = "data_generator.coordinator.rebalances"
 
         /** Convenience for the default scope name across all data-generator instruments. */
         const val SCOPE = "com.gridgain.demo.datagen"
@@ -71,4 +80,12 @@ class Instruments(otel: OpenTelemetry) {
     fun opAttributes(scenario: String, target: String, schema: String, op: String): Attributes =
         Attributes.builder().put(ATTR_SCENARIO, scenario).put(ATTR_TARGET, target)
             .put(ATTR_SCHEMA, schema).put(ATTR_OP, op).build()
+
+    /**
+     * Returns [base] decorated with the partition attribute. Used by worker code in
+     * distributed mode to tag every per-tick measurement with its slice id; single-pod
+     * runs never call this and stay schema-compatible with their existing attribute set.
+     */
+    fun withPartition(base: Attributes, partition: Int): Attributes =
+        base.toBuilder().put(ATTR_PARTITION, partition.toLong()).build()
 }
