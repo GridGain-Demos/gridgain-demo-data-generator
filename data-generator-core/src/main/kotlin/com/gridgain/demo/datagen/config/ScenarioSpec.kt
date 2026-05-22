@@ -12,6 +12,12 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
  * opt in with `transaction_scope: business_event`. This default mirrors how the workspace
  * uses caches today and keeps the simplest first-run experience working without forcing
  * users to spell out `none` in every scenario.
+ *
+ * NOTE: `distribution` is nullable in violation of "no nullable types without approval".
+ * Case-by-case approved: the YAML field is genuinely optional (absent => single-pod
+ * execution; present => multi-pod coordinator/worker mode). Mirroring the external
+ * shape with `T?` keeps the missing-value semantics explicit at the call site rather
+ * than burying it in a sentinel default.
  */
 data class ScenarioSpec(
     val name: String,
@@ -23,6 +29,19 @@ data class ScenarioSpec(
     @JsonProperty("transaction_scope") val transactionScope: TransactionScope = TransactionScope.NONE,
     val provisioning: ProvisioningMode = ProvisioningMode.SKIP,
     @JsonProperty("read_ratio") val readRatio: Double,
+    val distribution: DistributionSpec? = null,
+)
+
+/**
+ * Distributed-execution config. When present on a `ScenarioSpec`, the scenario is dispatched
+ * across `replicas` worker pods sharing the work via `partitionCount` partitions. The
+ * scenario's `rate` and `duration` are per-run totals (not per-pod); the coordinator divides
+ * them across active workers. `partitionCount >= replicas` is enforced in cross-element
+ * validation, not the schema.
+ */
+data class DistributionSpec(
+    val replicas: Int,
+    @JsonProperty("partition_count") val partitionCount: Int,
 )
 
 enum class TransactionScope {
