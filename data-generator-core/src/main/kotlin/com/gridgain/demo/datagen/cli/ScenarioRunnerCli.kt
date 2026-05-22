@@ -192,10 +192,19 @@ object ScenarioRunnerCli {
                 )
             }
 
+            val partitionStripe = resolution.coordinator?.derivePartitionStripeLocally()
+            if (partitionStripe != null) {
+                logger.lifecycle(
+                    "distributed mode: this pod owns partition stripe " +
+                        "${partitionStripe.partitionId}/${partitionStripe.partitionCount} " +
+                        "(sequences will stride by ${partitionStripe.partitionCount}*step)."
+                )
+            }
             val factory = ValueSourceFactory(
                 yamlDataRoot = parsed.dataFile.parent,
                 seed = 0L,
                 loadedState = loadedState,
+                partitionStripe = partitionStripe,
             )
             val rootSchema = resolution.scenario.rootSchemas.first()
             val gen = BusinessEventGenerator(

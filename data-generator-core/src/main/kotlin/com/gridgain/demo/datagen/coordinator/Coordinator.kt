@@ -69,6 +69,25 @@ class Coordinator(
     fun assignedPartitions(): Set<Int> = assignedRef.get()
     fun isLeader(): Boolean = leaderFlag.get()
 
+    /**
+     * Returns a stable [com.gridgain.demo.datagen.generation.PartitionStripe] derived from
+     * this pod's instance id. Used by the scenario-run path to stripe sequence cursors
+     * before the Coordinator's dynamic assignment is available (the LeaderElector takes a
+     * few seconds to settle, but the scenario should start immediately).
+     *
+     * Hash-based: `partitionId = abs(instanceId.hashCode()) % partitionCount`. Same
+     * instance id → same partition every run, so two pods with the same name (impossible
+     * in K8s within a namespace) would collide, but distinct pod names won't. Future work:
+     * switch to the Coordinator's authoritative assignment once `awaitAssignment` exists.
+     */
+    fun derivePartitionStripeLocally(): com.gridgain.demo.datagen.generation.PartitionStripe {
+        val pid = (instanceId.hashCode().rem(partitionCount).let { if (it < 0) it + partitionCount else it })
+        return com.gridgain.demo.datagen.generation.PartitionStripe(
+            partitionId = pid,
+            partitionCount = partitionCount,
+        )
+    }
+
     fun start() {
         check(started.compareAndSet(false, true)) { "Coordinator.start() called twice." }
         lease = LeaseHolder(
