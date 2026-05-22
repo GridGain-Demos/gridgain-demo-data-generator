@@ -92,10 +92,41 @@ object OtelInitializer {
         }
     }
 
-    private fun buildResource(spec: OtelSpec): Resource {
+    /**
+     * Builds the Resource attached to the SDK. The raw OTel Java SDK does not read
+     * `OTEL_RESOURCE_ATTRIBUTES` itself (only the autoconfigure module does), so this
+     * method parses it manually. Precedence — later wins:
+     *   built-in service.name → ops.yaml `otel.attributes` → OTEL_RESOURCE_ATTRIBUTES env
+     *
+     * `internal` (not private) so tests can verify env-var parsing without standing up an
+     * exporter. `envLookup` is the injection seam for tests; production passes `System::getenv`.
+     */
+    internal fun buildResource(
+        spec: OtelSpec,
+        envLookup: (String) -> String? = System::getenv,
+    ): Resource {
         val builder = Attributes.builder()
             .put(AttributeKey.stringKey("service.name"), "gridgain-demo-data-generator")
         spec.attributes.forEach { (k, v) -> builder.put(AttributeKey.stringKey(k), v) }
+        envLookup("OTEL_RESOURCE_ATTRIBUTES")?.let { value ->
+            parseResourceAttributes(value).forEach { (k, v) ->
+                builder.put(AttributeKey.stringKey(k), v)
+            }
+        }
         return Resource.getDefault().merge(Resource.create(builder.build()))
     }
+
+    /**
+     * Parses a comma-separated `k=v` list as defined by the OTel resource-attribute env
+     * convention. Entries without a `=`, with an empty key, or empty after trimming are
+     * silently dropped — a malformed entry should not block the rest of the resource.
+     */
+    internal fun parseResourceAttributes(value: String): Map<String, String> =
+        value.split(",").mapNotNull { entry ->
+            val parts = entry.split("=", limit = 2)
+            if (parts.size != 2) return@mapNotNull null
+            val k = parts[0].trim()
+            val v = parts[1].trim()
+            if (k.isEmpty()) null else k to v
+        }.toMap()
 }
