@@ -56,4 +56,31 @@ class OpsConfigMigrationRunnerTest {
         assertThat(text).contains("schema_version: 3")
         assertThat(text).containsPattern("scenarios:\\s*\\[\\s*\\]")
     }
+
+    // v3 -> v4 is a no-op apart from the version bump: the new optional `metrics:` block
+    // (live throughput/latency export to Kafka) is absent in legacy files, so they keep the
+    // existing "no live export" behaviour.
+    @Test
+    fun `migrates a v3 ops file forward to v4 without dropping scenarios`(@TempDir dir: Path) {
+        val v3Body = """
+            schema_version: 3
+            scenarios:
+              - name: load
+                target: gg8-trip
+                root_schemas: [customer]
+                rate: { kind: constant, ops_per_second: 50 }
+                duration: { kind: count, value: 200 }
+                read_ratio: 0.1
+            targets:
+              - name: gg8-trip
+                kind: gg8-kv
+                cluster_name: example-gcp-8a
+        """.trimIndent() + "\n"
+        val file = dir.resolve("ops.yaml").also { it.writeText(v3Body) }
+        val text = OpsConfigMigrationRunner.create()
+            .ensureCurrentVersion(file.toFile(), targetVersion = 4, logger = logger)
+        assertThat(text).contains("schema_version: 4")
+        assertThat(text).contains("name: load")
+        assertThat(text).contains("cluster_name: example-gcp-8a")
+    }
 }

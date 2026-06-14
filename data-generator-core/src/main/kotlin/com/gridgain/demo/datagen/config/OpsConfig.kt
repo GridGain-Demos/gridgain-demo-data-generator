@@ -14,5 +14,8 @@ data class OpsConfig(
     @JsonProperty("schema_version") val schemaVersion: Int,
     val targets: List<TargetSpec> = emptyList(),
     val otel: OtelSpec = OtelSpec.NONE,
+    // Optional live-metrics export (v4+). Null when `metrics:` is omitted — consistent with the
+    // otel block being optional; the reporter is only wired when this is present.
+    val metrics: MetricsSpec? = null,
     val scenarios: List<ScenarioSpec>,
 )

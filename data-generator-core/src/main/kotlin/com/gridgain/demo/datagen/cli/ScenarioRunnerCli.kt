@@ -13,6 +13,9 @@ import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
+import com.gridgain.demo.datagen.metrics.KafkaMetricsSink
+import com.gridgain.demo.datagen.metrics.LiveMetricsReporter
+import com.gridgain.demo.datagen.metrics.MetricsRecorder
 import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.observability.LifecycleEvent
 import com.gridgain.demo.datagen.observability.OtelInitializer
@@ -173,6 +176,24 @@ object ScenarioRunnerCli {
         resolution.pendingEvents.forEach { runLog.emit(it) }
         resolution.pendingEvents.clear()
 
+        // Live throughput/latency export (opt-in via ops.yaml `metrics:`): the runner feeds per-op
+        // latency into the recorder; the reporter publishes a snapshot (~1s) to a Kafka topic for
+        // external consumers (e.g. the demo UI), so it works whether the generator runs in-cluster
+        // or local. Absent metrics block => recorder is a harmless no-op, no reporter, no Kafka dep used.
+        val metricsRecorder = MetricsRecorder()
+        val metricsReporter = resolution.parsedConfig.ops.metrics?.let { m ->
+            LiveMetricsReporter(
+                recorder = metricsRecorder,
+                sink = KafkaMetricsSink(bootstrapServers = m.kafkaBootstrap, topic = m.topic),
+                targetTps = ScenarioRunner.configuredStartRate(resolution.scenario),
+                runId = runId,
+                intervalMs = m.intervalMs,
+            ).also {
+                it.start()
+                logger.lifecycle("live metrics: publishing to Kafka topic '${m.topic}' every ${m.intervalMs}ms")
+            }
+        }
+
         try {
             resolution.coordinator?.let { coord ->
                 coord.start()
@@ -226,6 +247,7 @@ object ScenarioRunnerCli {
                 keyRegistry = keyRegistry,
                 instruments = resolution.instruments,
                 targetName = resolution.targetSpec.name,
+                metrics = metricsRecorder,
             )
 
             runLog.emit(LifecycleEvent.ScenarioStarted(
@@ -288,6 +310,9 @@ object ScenarioRunnerCli {
 
             return result
         } finally {
+            // Stop the reporter first so it flushes a final inactive snapshot (observedTps→0),
+            // letting a live consumer see the run end / a stepped-rate restart cleanly.
+            runCatching { metricsReporter?.close() }
             runCatching { resolution.coordinator?.stop() }
             OtelInitializer.close(resolution.openTelemetry)
         }

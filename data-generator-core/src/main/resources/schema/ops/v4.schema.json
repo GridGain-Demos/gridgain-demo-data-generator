@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gridgain.com/datagen/ops-v4.schema.json",
+  "title": "Data Generator ops.yaml v4",
+  "type": "object",
+  "required": ["schema_version", "scenarios"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 4 },
+    "scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } },
+    "targets": { "type": "array", "items": { "$ref": "#/$defs/target" } },
+    "otel": { "$ref": "#/$defs/otel" },
+    "metrics": { "$ref": "#/$defs/metrics" }
+  },
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "required": ["name", "root_schemas", "rate", "duration", "read_ratio"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "target": { "type": "string" },
+        "root_schemas": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "rate": { "$ref": "#/$defs/rate" },
+        "duration": { "$ref": "#/$defs/duration" },
+        "stop_conditions": { "type": "array", "items": { "$ref": "#/$defs/stop_condition" } },
+        "transaction_scope": { "enum": ["business_event", "none"] },
+        "provisioning": { "enum": ["skip", "emit", "apply"], "default": "skip" },
+        "read_ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "distribution": { "$ref": "#/$defs/distribution" }
+      }
+    },
+    "distribution": {
+      "description": "Multi-pod execution. Absent => single-pod (legacy). When present, partition_count must be >= replicas; this is enforced in cross-element validation, not by the schema itself.",
+      "type": "object",
+      "required": ["replicas", "partition_count"],
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "partition_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "rate": {
+      "oneOf": [
+        { "$ref": "#/$defs/rate_constant" },
+        { "$ref": "#/$defs/rate_ramped" },
+        { "$ref": "#/$defs/rate_stepped" }
+      ]
+    },
+    "rate_constant": {
+      "type": "object", "required": ["kind", "ops_per_second"], "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "constant" },
+        "ops_per_second": { "type": "number", "exclusiveMinimum": 0.0 }
+      }
+    },
+    "rate_ramped": {
+      "type": "object", "required": ["kind", "from", "to", "over"], "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "ramped" },
+        "from": { "type": "number", "exclusiveMinimum": 0.0 },
+        "to": { "type": "number", "exclusiveMinimum": 0.0 },
+        "over": { "type": "string", "minLength": 1 }
+      }
+    },
+    "rate_stepped": {
+      "type": "object", "required": ["kind", "steps"], "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "stepped" },
+        "steps": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "required": ["rate", "hold"], "additionalProperties": false,
+            "properties": {
+              "rate": { "type": "number", "exclusiveMinimum": 0.0 },
+              "hold": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "duration": {
+      "oneOf": [
+        { "$ref": "#/$defs/duration_time" },
+        { "$ref": "#/$defs/duration_count" },
+        { "$ref": "#/$defs/duration_until_stop" }
+      ]
+    },
+    "duration_time": {
+      "type": "object", "required": ["kind", "value"], "additionalProperties": false,
+      "properties": { "kind": { "const": "time" }, "value": { "type": "string", "minLength": 1 } }
+    },
+    "duration_count": {
+      "type": "object", "required": ["kind", "value"], "additionalProperties": false,
+      "properties": { "kind": { "const": "count" }, "value": { "type": "integer", "minimum": 1 } }
+    },
+    "duration_until_stop": {
+      "type": "object", "required": ["kind"], "additionalProperties": false,
+      "properties": { "kind": { "const": "until_stop_condition" } }
+    },
+    "stop_condition": {
+      "oneOf": [
+        { "$ref": "#/$defs/sc_latency_p99" },
+        { "$ref": "#/$defs/sc_latency_p999" },
+        { "$ref": "#/$defs/sc_error_rate" },
+        { "$ref": "#/$defs/sc_external_signal" }
+      ]
+    },
+    "sc_latency_p99": {
+      "type": "object", "required": ["kind", "threshold"], "additionalProperties": false,
+      "properties": { "kind": { "const": "latency_p99_above" }, "threshold": { "type": "string", "minLength": 1 } }
+    },
+    "sc_latency_p999": {
+      "type": "object", "required": ["kind", "threshold"], "additionalProperties": false,
+      "properties": { "kind": { "const": "latency_p999_above" }, "threshold": { "type": "string", "minLength": 1 } }
+    },
+    "sc_error_rate": {
+      "type": "object", "required": ["kind", "threshold"], "additionalProperties": false,
+      "properties": { "kind": { "const": "error_rate_above" }, "threshold": { "type": "number", "exclusiveMinimum": 0.0, "maximum": 1.0 } }
+    },
+    "sc_external_signal": {
+      "type": "object", "required": ["kind"], "additionalProperties": false,
+      "properties": { "kind": { "const": "external_signal" } }
+    },
+    "target": {
+      "oneOf": [
+        { "$ref": "#/$defs/target_gg8_kv" },
+        { "$ref": "#/$defs/target_gg9_kv" }
+      ]
+    },
+    "target_gg8_kv": {
+      "type": "object",
+      "required": ["kind", "name", "cluster_name"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "gg8-kv" },
+        "name": { "type": "string", "minLength": 1 },
+        "cluster_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "target_gg9_kv": {
+      "type": "object",
+      "required": ["kind", "name", "cluster_name"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "gg9-kv" },
+        "name": { "type": "string", "minLength": 1 },
+        "cluster_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "otel": {
+      "type": "object",
+      "required": ["exporter"],
+      "additionalProperties": false,
+      "properties": {
+        "exporter": { "enum": ["none", "otlp", "prometheus"], "default": "none" },
+        "endpoint": { "type": "string", "minLength": 1 },
+        "attributes": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "metrics": {
+      "description": "Optional live throughput/latency export to a Kafka topic. Absent => no live export.",
+      "type": "object",
+      "required": ["kafka_bootstrap", "topic"],
+      "additionalProperties": false,
+      "properties": {
+        "kafka_bootstrap": { "type": "string", "minLength": 1 },
+        "topic": { "type": "string", "minLength": 1 },
+        "interval_ms": { "type": "integer", "minimum": 100, "default": 1000 }
+      }
+    }
+  }
+}
