@@ -114,7 +114,7 @@ Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-
 This repo's own `CLAUDE.md` (§Key files) is the canonical file map — defer to it. References below
 are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
 - version constants: `config/ConfiguredState.kt` (`CURRENT_OPS_SCHEMA_VERSION`, `CURRENT_DATA_SCHEMA_VERSION`)
-- migrations: `config/ConfigMigration.kt` (interface + runner) + `config/Migrate*` step classes
+- migrations: the ops/data migration runner(s) + `Migrate*` step classes under `config/` (defer to the repo CLAUDE.md §Key files for exact filenames — both `ConfigMigration` and `OpsConfigMigrationRunner`/`DataConfigMigrationRunner` naming have appeared)
 - ops/data JSONSchema: `src/main/resources/schema/{ops,data}/` (per version)
 - rate limiters: `scenario/` (Constant/Ramped/Stepped)
 - transaction/atomicity rule: `target/Gg8KvTarget.kt` (gg8 module)
