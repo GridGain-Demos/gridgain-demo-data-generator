@@ -6,8 +6,11 @@ import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.target.TransactionOutcome
 import com.gridgain.demo.client.gg8.DemoAddressFinder
 import org.apache.ignite.Ignition
+import org.apache.ignite.client.ClientCache
+import org.apache.ignite.client.ClientCacheConfiguration
 import org.apache.ignite.client.IgniteClient
 import org.apache.ignite.configuration.ClientConfiguration
+import java.util.concurrent.ConcurrentHashMap
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -39,6 +42,9 @@ class Gg8KvTarget(
      *  ScenarioRunner's write loop keeps invoking ensureClient (catching errors per-event),
      *  multiplying a 6s probe budget by N events. */
     @Volatile private var fatalConnectFailure: MisconfigurationException? = null
+
+    /** Per-schema cache handles, created once with statistics enabled (see [cacheFor]). */
+    private val cacheHandles = ConcurrentHashMap<String, ClientCache<Any, Map<String, Any?>>>()
 
     private fun ensureClient(): IgniteClient {
         val existing = client
@@ -121,14 +127,31 @@ class Gg8KvTarget(
         val key = row[keyColumn] ?: throw IllegalStateException(
             "row of schema '$schemaName' has null value in key column '$keyColumn'."
         )
-        val cache = ignite.getOrCreateCache<Any, Map<String, Any?>>(schemaName)
-        cache.put(key, row)
+        cacheFor(ignite, schemaName).put(key, row)
     }
+
+    /**
+     * Cache handle for [name], created once with statistics ENABLED. GG caches default to statistics
+     * off, which leaves the cluster cache-ops metrics (CachePuts/CacheGets) — and the monitoring
+     * dashboards that read them — blank even under heavy generated load. Creating the cache with
+     * `statisticsEnabled = true` makes those metrics populate. Handles are cached, so this also
+     * avoids a getOrCreateCache round-trip per put. If a cache already exists with a config the
+     * server won't reconcile, fall back to the plain handle (statistics can still be toggled at
+     * runtime via the cluster API).
+     */
+    private fun cacheFor(ignite: IgniteClient, name: String): ClientCache<Any, Map<String, Any?>> =
+        cacheHandles.computeIfAbsent(name) {
+            try {
+                ignite.getOrCreateCache(ClientCacheConfiguration().setName(it).setStatisticsEnabled(true))
+            } catch (e: Exception) {
+                ignite.getOrCreateCache<Any, Map<String, Any?>>(it)
+            }
+        }
 
     override fun read(cacheName: String, key: Any): ReadOutcome {
         return try {
             val ignite = ensureClient()
-            val cache = ignite.getOrCreateCache<Any, Map<String, Any?>>(cacheName)
+            val cache = cacheFor(ignite, cacheName)
             val value = cache.get(key)
             ReadOutcome(success = true, value = value)
         } catch (e: Exception) {
