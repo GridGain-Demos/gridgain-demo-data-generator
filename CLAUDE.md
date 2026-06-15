@@ -417,3 +417,17 @@ project conventions:
 
 Build-tool-agnostic core; no `org.gradle.*` imports in core packages
 (project-wide rule).
+
+## Usage skill — read it, and keep it current
+
+This repo ships a standalone usage skill at
+`.claude/skills/gridgain-demo-data-generator/SKILL.md` — the config-surface + semantics contract
+(ops.yaml/data.yaml, rate kinds, `transaction_scope`, distribution, provisioning, metrics). It
+auto-loads when working in this repo and is referenced by consumers (e.g. the toolkit plugin's
+`gridgain-demo-toolkit` skill).
+
+**Maintenance rule (binding).** When you change the generator's config surface — an ops/data
+schema field, a rate or value-source kind, `transaction_scope`/distribution semantics, the metrics
+block, or the CLI — **update that SKILL.md in the same change and bump its *Last updated* date.**
+The skill is standalone: it must never reference the gradle plugin or any demo. Prefer citing a
+source file over duplicating volatile detail.

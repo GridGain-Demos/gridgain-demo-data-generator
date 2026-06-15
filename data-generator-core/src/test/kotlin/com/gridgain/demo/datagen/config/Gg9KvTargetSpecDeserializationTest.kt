@@ -35,9 +35,9 @@ class Gg9KvTargetSpecDeserializationTest {
     }
 
     @Test
-    fun `ops v2 schema accepts a gg9-kv target`() {
+    fun `current ops schema accepts a gg9-kv target`() {
         val yaml = """
-            schema_version: 2
+            schema_version: $CURRENT_OPS_SCHEMA_VERSION
             targets:
               - { kind: gg9-kv, name: gg9-trip, cluster_name: trip-cluster-9 }
             scenarios:

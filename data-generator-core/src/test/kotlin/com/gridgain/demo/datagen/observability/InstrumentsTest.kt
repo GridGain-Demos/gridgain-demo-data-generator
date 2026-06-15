@@ -48,4 +48,23 @@ class InstrumentsTest {
         val names = reader.collectAllMetrics().map { it.name }
         assertThat(names).contains("data_generator.target_rate", "data_generator.observed_rate")
     }
+
+    @Test fun `withPartition decorates an existing attribute set with the partition key`() {
+        val instruments = Instruments(OpenTelemetry.noop())
+        val base = instruments.opAttributes("load", "gg8-trip", "customer", "put")
+        val withPart = instruments.withPartition(base, 7)
+        val keys = withPart.asMap().keys.map { it.key }
+        assertThat(keys).contains("scenario", "target", "schema", "op", "partition")
+        val partitionValue = withPart.asMap()
+            .entries.first { it.key.key == "partition" }.value
+        assertThat(partitionValue).isEqualTo(7L)
+    }
+
+    @Test fun `coordinator metric name constants follow the data_generator coordinator naming`() {
+        // Constants are reserved here; the actual instrument wiring lands with the
+        // Coordinator class so the metrics only register when the pod holds the lease.
+        assertThat(Instruments.COORDINATOR_WORKER_COUNT).isEqualTo("data_generator.coordinator.worker_count")
+        assertThat(Instruments.COORDINATOR_PARTITION_ASSIGNMENTS).isEqualTo("data_generator.coordinator.partition_assignments")
+        assertThat(Instruments.COORDINATOR_REBALANCES).isEqualTo("data_generator.coordinator.rebalances")
+    }
 }

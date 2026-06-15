@@ -18,6 +18,12 @@ class ValueSourceFactory(
     private val seed: Long,
     private val uniqueMaxRetries: Int = 1000,
     private val loadedState: GeneratorState? = null,
+    /**
+     * Non-null in distributed mode; every [SequenceValueSource] this factory builds will
+     * stride by `partitionCount * step` and start at `start + partitionId * step`, so two
+     * workers never emit the same key. Null in single-pod mode (existing behavior).
+     */
+    private val partitionStripe: PartitionStripe? = null,
 ) {
 
     /** `(schemaName, columnName) → built SequenceValueSource`, populated by `build`. */
@@ -49,6 +55,7 @@ class ValueSourceFactory(
                 start = spec.start,
                 step = spec.step,
                 initialPosition = savedNext,
+                partitionStripe = partitionStripe,
             )
             sequencesByKey[schemaName to column.name] = src
             src

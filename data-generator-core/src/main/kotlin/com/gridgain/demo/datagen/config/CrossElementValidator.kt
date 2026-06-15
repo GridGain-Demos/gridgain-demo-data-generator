@@ -236,3 +236,24 @@ class ScenarioTargetValidator : CrossElementValidator {
         is Gg9KvTargetSpec -> true to true
     }
 }
+
+/**
+ * Enforces `partition_count >= replicas` on each scenario's optional `distribution:` block.
+ * JSONSchema can't express the cross-field constraint without `$data` refs, so it lives here.
+ * `replicas >= 1` and `partition_count >= 1` are already enforced by the JSONSchema.
+ */
+class DistributionValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        for (scenario in ops.scenarios) {
+            val dist = scenario.distribution ?: continue
+            if (dist.partitionCount < dist.replicas) {
+                errors += "scenario '${scenario.name}' has distribution.partition_count=${dist.partitionCount} " +
+                    "but distribution.replicas=${dist.replicas}. " +
+                    "partition_count must be >= replicas so every worker gets at least one partition. " +
+                    "Either lower replicas or raise partition_count."
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = emptyList())
+    }
+}

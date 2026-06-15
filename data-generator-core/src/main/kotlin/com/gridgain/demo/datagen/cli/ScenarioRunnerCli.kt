@@ -7,11 +7,15 @@ import com.gridgain.demo.datagen.config.OtelSpec
 import com.gridgain.demo.datagen.config.ParsedConfiguration
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.TargetSpec
+import com.gridgain.demo.datagen.coordinator.Coordinator
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
+import com.gridgain.demo.datagen.metrics.KafkaMetricsSink
+import com.gridgain.demo.datagen.metrics.LiveMetricsReporter
+import com.gridgain.demo.datagen.metrics.MetricsRecorder
 import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.observability.LifecycleEvent
 import com.gridgain.demo.datagen.observability.OtelInitializer
@@ -25,6 +29,7 @@ import com.gridgain.demo.datagen.state.GeneratorState
 import com.gridgain.demo.datagen.state.RunHistoryEntry
 import com.gridgain.demo.datagen.state.StatePersister
 import com.gridgain.demo.datagen.target.Target
+import io.fabric8.kubernetes.client.KubernetesClientBuilder
 import io.opentelemetry.api.OpenTelemetry
 import net.datafaker.Faker
 import org.slf4j.LoggerFactory
@@ -39,13 +44,29 @@ object ScenarioRunnerCli {
         val keyColumnByName: Map<String, String>,
         val openTelemetry: OpenTelemetry,
         val instruments: Instruments,
+        /**
+         * Distributed-mode orchestrator. Non-null when the scenario declares a `distribution:`
+         * block AND the process is running in-cluster (POD_NAME / POD_NAMESPACE present in
+         * the env). Null for single-pod scenarios and for local dev runs of a distributed
+         * scenario.
+         */
+        val coordinator: Coordinator?,
         val pendingEvents: MutableList<LifecycleEvent> = mutableListOf(),
     )
+
+    /** Factory hook: tests inject a stub to bypass the real K8s client. */
+    fun interface CoordinatorFactory {
+        fun build(scenario: ScenarioSpec, env: (String) -> String?, logger: DataGenLogger): Coordinator?
+    }
 
     fun defaultLogger(): DataGenLogger =
         Slf4jDataGenLogger(LoggerFactory.getLogger("datagen-cli"))
 
-    fun resolve(parsed: CliArgs, logger: DataGenLogger): Resolution {
+    fun resolve(
+        parsed: CliArgs,
+        logger: DataGenLogger,
+        coordinatorFactory: CoordinatorFactory = DefaultCoordinatorFactory,
+    ): Resolution {
         System.setProperty("gg.demo.client.endpoints", parsed.clusterEndpoints.toAbsolutePath().toString())
 
         val parser = ConfigurationParser(logger = logger)
@@ -70,6 +91,7 @@ object ScenarioRunnerCli {
         val effectiveOtelSpec = applyEndpointOverride(parsedConfig.ops.otel, parsed.otelEndpointOverride, logger)
         val openTelemetry = OtelInitializer.fromSpec(effectiveOtelSpec, logger)
         val instruments = Instruments(openTelemetry)
+        val coordinator = coordinatorFactory.build(scenario, System::getenv, logger)
 
         return Resolution(
             parsedConfig = parsedConfig,
@@ -78,7 +100,44 @@ object ScenarioRunnerCli {
             keyColumnByName = keyColumnByName,
             openTelemetry = openTelemetry,
             instruments = instruments,
+            coordinator = coordinator,
         )
+    }
+
+    /**
+     * Default [CoordinatorFactory]. Returns a Coordinator only when both conditions hold:
+     * 1. The scenario declares a `distribution:` block (multi-pod mode requested).
+     * 2. POD_NAME and POD_NAMESPACE env vars are set (we're running inside a k8s Pod
+     *    that was launched via the data-generator-distributed Deployment manifest).
+     *
+     * Local-laptop runs of a scenario that happens to have `distribution:` configured will
+     * log a warning and run in single-pod mode rather than failing the run; this matches
+     * how `--otel-endpoint-override` behaves when its prerequisite is missing.
+     */
+    internal object DefaultCoordinatorFactory : CoordinatorFactory {
+        override fun build(
+            scenario: ScenarioSpec, env: (String) -> String?, logger: DataGenLogger,
+        ): Coordinator? {
+            val distribution = scenario.distribution ?: return null
+            val podName = env("POD_NAME")
+            val podNamespace = env("POD_NAMESPACE")
+            if (podName.isNullOrBlank() || podNamespace.isNullOrBlank()) {
+                logger.warn(
+                    "scenario '${scenario.name}' declares distribution:{replicas=${distribution.replicas}, " +
+                        "partition_count=${distribution.partitionCount}} but POD_NAME/POD_NAMESPACE are unset. " +
+                        "Falling back to single-pod execution — set those env vars (k8s downward API) to enable " +
+                        "distributed mode."
+                )
+                return null
+            }
+            return Coordinator(
+                client = KubernetesClientBuilder().build(),
+                namespace = podNamespace,
+                scenarioName = scenario.name,
+                instanceId = podName,
+                partitionCount = distribution.partitionCount,
+            )
+        }
     }
 
     /**
@@ -117,7 +176,33 @@ object ScenarioRunnerCli {
         resolution.pendingEvents.forEach { runLog.emit(it) }
         resolution.pendingEvents.clear()
 
+        // Live throughput/latency export (opt-in via ops.yaml `metrics:`): the runner feeds per-op
+        // latency into the recorder; the reporter publishes a snapshot (~1s) to a Kafka topic for
+        // external consumers (e.g. the demo UI), so it works whether the generator runs in-cluster
+        // or local. Absent metrics block => recorder is a harmless no-op, no reporter, no Kafka dep used.
+        val metricsRecorder = MetricsRecorder()
+        val metricsReporter = resolution.parsedConfig.ops.metrics?.let { m ->
+            LiveMetricsReporter(
+                recorder = metricsRecorder,
+                sink = KafkaMetricsSink(bootstrapServers = m.kafkaBootstrap, topic = m.topic),
+                targetTps = ScenarioRunner.configuredStartRate(resolution.scenario),
+                runId = runId,
+                intervalMs = m.intervalMs,
+            ).also {
+                it.start()
+                logger.lifecycle("live metrics: publishing to Kafka topic '${m.topic}' every ${m.intervalMs}ms")
+            }
+        }
+
         try {
+            resolution.coordinator?.let { coord ->
+                coord.start()
+                logger.lifecycle(
+                    "distributed mode: Coordinator started (scenario='${resolution.scenario.name}', " +
+                        "partition_count=${resolution.scenario.distribution?.partitionCount}). " +
+                        "Initial lease/assignment will settle within a few seconds."
+                )
+            }
             val persister = StatePersister()
             val loadedState: GeneratorState? = persister.load(layout.stateFile)
             if (loadedState != null) {
@@ -128,10 +213,19 @@ object ScenarioRunnerCli {
                 )
             }
 
+            val partitionStripe = resolution.coordinator?.derivePartitionStripeLocally()
+            if (partitionStripe != null) {
+                logger.lifecycle(
+                    "distributed mode: this pod owns partition stripe " +
+                        "${partitionStripe.partitionId}/${partitionStripe.partitionCount} " +
+                        "(sequences will stride by ${partitionStripe.partitionCount}*step)."
+                )
+            }
             val factory = ValueSourceFactory(
                 yamlDataRoot = parsed.dataFile.parent,
                 seed = 0L,
                 loadedState = loadedState,
+                partitionStripe = partitionStripe,
             )
             val rootSchema = resolution.scenario.rootSchemas.first()
             val gen = BusinessEventGenerator(
@@ -153,6 +247,7 @@ object ScenarioRunnerCli {
                 keyRegistry = keyRegistry,
                 instruments = resolution.instruments,
                 targetName = resolution.targetSpec.name,
+                metrics = metricsRecorder,
             )
 
             runLog.emit(LifecycleEvent.ScenarioStarted(
@@ -189,14 +284,21 @@ object ScenarioRunnerCli {
                     stopReason = result.stopReason,
                 ),
             )
-            persister.save(newState, layout.stateFile)
-
-            runLog.emit(LifecycleEvent.StatePersisted(
-                stateFile = layout.stateFile,
-                sequenceCount = newState.sequences.size,
-                keyCount = newState.keys.sumOf { it.keys.size },
-                runHistorySize = newState.runHistory.size,
-            ))
+            val coord = resolution.coordinator
+            if (coord == null || coord.isLeader()) {
+                StatePersister(writable = true).save(newState, layout.stateFile)
+                runLog.emit(LifecycleEvent.StatePersisted(
+                    stateFile = layout.stateFile,
+                    sequenceCount = newState.sequences.size,
+                    keyCount = newState.keys.sumOf { it.keys.size },
+                    runHistorySize = newState.runHistory.size,
+                ))
+            } else {
+                logger.lifecycle(
+                    "distributed mode (follower): skipping state persistence; the leader pod owns " +
+                        "the on-disk state.yaml write."
+                )
+            }
 
             logger.lifecycle(
                 "scenario '${resolution.scenario.name}' complete: ${result.successCount} successes, " +
@@ -208,6 +310,10 @@ object ScenarioRunnerCli {
 
             return result
         } finally {
+            // Stop the reporter first so it flushes a final inactive snapshot (observedTps→0),
+            // letting a live consumer see the run end / a stepped-rate restart cleanly.
+            runCatching { metricsReporter?.close() }
+            runCatching { resolution.coordinator?.stop() }
             OtelInitializer.close(resolution.openTelemetry)
         }
     }

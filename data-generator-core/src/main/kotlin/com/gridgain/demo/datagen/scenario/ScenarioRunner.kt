@@ -12,6 +12,7 @@ import com.gridgain.demo.datagen.config.UntilStopDurationSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
+import com.gridgain.demo.datagen.metrics.MetricsRecorder
 import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.state.KeyRegistryState
 import com.gridgain.demo.datagen.target.Target
@@ -30,6 +31,9 @@ class ScenarioRunner(
     private val keyRegistry: KeyRegistry = KeyRegistry(),
     private val instruments: Instruments = Instruments.noop(),
     private val targetName: String = "<unknown>",
+    // Live throughput/latency counters. Defaults to a detached recorder no consumer reads, so
+    // the metric collection is opt-in by wiring a LiveMetricsWriter to the same instance.
+    private val metrics: MetricsRecorder = MetricsRecorder(),
 ) {
 
     private var totalAttempts: Long = 0L
@@ -49,12 +53,7 @@ class ScenarioRunner(
     fun run(): ScenarioResult {
         val rateLimiter = buildRateLimiter()
         val evaluator = StopConditionEvaluator(scenario.stopConditions)
-        val configuredRate: Double = when (val r = scenario.rate) {
-            is ConstantRateSpec -> r.opsPerSecond
-            is RampedRateSpec -> r.from
-            is SteppedRateSpec -> r.steps.first().rate
-        }
-        instruments.targetRateRef.set(configuredRate)
+        instruments.targetRateRef.set(configuredStartRate(scenario))
         totalAttempts = 0L
         startedNanos = System.nanoTime()
         val started = Instant.now()
@@ -146,6 +145,9 @@ class ScenarioRunner(
             instruments.inFlight.add(-1, attrs)
         }
         val latencyNanos = System.nanoTime() - t0
+        // Same latency the OTel histogram gets — the wall time of the target operation (the
+        // GridGain write/read), which is the "execution latency" the live graph reports.
+        metrics.record(latencyNanos = latencyNanos, success = success)
         instruments.opLatency.record(latencyNanos.toDouble(), attrs)
         instruments.opCount.add(1, attrs)
         if (!success) instruments.opErrors.add(1, attrs.toBuilder()
@@ -197,5 +199,16 @@ class ScenarioRunner(
         is SteppedRateSpec -> SteppedRateLimiter(
             steps = r.steps.map { StepConfig(rate = it.rate, hold = Duration.parse(it.hold)) },
         )
+    }
+
+    companion object {
+        /** The scenario's initial target rate (ops/sec): the constant rate, a ramp's start
+         *  value, or the first step. Seeds both the OTel target-rate gauge and the live-metrics
+         *  `targetTps` so a graph can show requested-vs-achieved. */
+        fun configuredStartRate(scenario: ScenarioSpec): Double = when (val r = scenario.rate) {
+            is ConstantRateSpec -> r.opsPerSecond
+            is RampedRateSpec -> r.from
+            is SteppedRateSpec -> r.steps.first().rate
+        }
     }
 }
