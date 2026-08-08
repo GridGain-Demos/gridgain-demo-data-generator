@@ -5,7 +5,7 @@ description: How to USE the GridGain demo data generator — authoring ops.yaml/
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-06-15*
+*Last updated: 2026-08-08*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -99,6 +99,8 @@ schemas:
 4. **Schema name = cache name.** A `data.yaml` schema named `account` writes to a GG cache/table literally named `account` — **not** `SQL_PUBLIC_ACCOUNT`. If a consumer reads from SQL-created `SQL_PUBLIC_*` caches, generator load won't appear there unless the schema names and key/value shapes are aligned to those caches.
 5. **Durations are ISO-8601** (`java.time.Duration`): `PT10M`, not `10m` (`DateTimeParseException`).
 6. **Single-thread per pod.** One pod is bounded by GG round-trip latency, so raising `ops_per_second` alone plateaus — add pods (`replicas`) to push more total throughput.
+7. **A missing CLI argument surfaces as a raw stacktrace**, not a usage message: `NoSuchElementException: Key --data is missing in the map` at `CliArgs.kt:33`. It names neither the option that was expected nor the caller, which makes it disproportionately confusing when the caller is a systemd unit's `ExecStart` rather than a shell.
+8. **Migration rewrites `ops.yaml`/`data.yaml` in place and drops every comment.** `ConfigMigrationRunner.ensureCurrentVersion` round-trips the file through SnakeYAML, so a hand-annotated ops file loses its rationale the first time it is run against a newer generator. Back it up, or hand-bump `schema_version` when the intervening migrations are no-ops (`MigrateOpsV3toV4` is one — v4 only adds the optional `metrics:` block).
 
 ## Metrics
 
@@ -108,6 +110,21 @@ schemas:
 ## CLI
 
 Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-gg9`; dispatcher `ScenarioRunnerCli`). It takes the scenario name + paths to `ops.yaml`, `data.yaml`, the client-endpoints file, and an output dir, plus an execution mode (local fork vs in-cluster). **Verify the exact flag names against `ScenarioRunnerCli` / the `*Main` classes before scripting** — the config files above are the stable contract; launch flags are an implementation detail.
+
+## Installable distributions (`-dist` modules)
+
+`:data-generator-gg8-dist:distTar` / `:data-generator-gg9-dist:distTar` build a self-contained
+`tar.gz` — `bin/` launcher + `lib/` jars — for installation on a machine, as opposed to the container
+image the in-cluster path uses. This is what the toolkit's `platform: hosts` data generator installs
+(a `distributions` entry of `type: data-generator`, naming the archive's `launcher_name`).
+
+- **Configure GZIP explicitly.** A bare `distTar` produces an *uncompressed* `.tar`, which the
+  toolkit's `ArchiveFormat` rejects — the archive builds cleanly and is refused on the machine.
+- **Invoke the `bin/` launcher, never a hand-written `java -cp`.** The build bakes the GG8
+  `--add-opens` flags into the script; a restated command line has to repeat them and will silently
+  omit them the first time someone edits it.
+- **One archive per GridGain major version.** The GG8 and GG9 thin clients pull incompatible Ignite
+  runtimes — the same reason the images and the `--mode=local` classpaths are split.
 
 ## Sources of truth (verify here when exact)
 
