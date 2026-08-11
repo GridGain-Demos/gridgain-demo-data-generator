@@ -24,4 +24,8 @@ include(
     ":data-generator-gg9",
     ":data-generator-gg8-image",
     ":data-generator-gg9-image",
+    // Installable archives for the demo toolkit's `hosts` platform, which runs the generator as a
+    // systemd unit rather than a container.
+    ":data-generator-gg8-dist",
+    ":data-generator-gg9-dist",
 )

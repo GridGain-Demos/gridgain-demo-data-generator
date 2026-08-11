@@ -79,3 +79,11 @@ tasks.register("publishStandardImages") {
     description = "Build the data-generator images via jib and push to the registry specified by -PimageRegistry (default: ghcr.io/gridgain-demos). Credentials come from -PgridgainGhcrUsername / -PgridgainGhcrPassword."
     dependsOn(":data-generator-gg8-image:jib", ":data-generator-gg9-image:jib")
 }
+
+tasks.register("buildStandardDistributions") {
+    group = "distribution"
+    description = "Build the installable tar.gz distributions for both GG major versions, under " +
+        "data-generator-gg{8,9}-dist/build/distributions. These are what the demo toolkit's 'hosts' " +
+        "platform installs; the images above are what its Kubernetes platform runs."
+    dependsOn(":data-generator-gg8-dist:distTar", ":data-generator-gg9-dist:distTar")
+}
