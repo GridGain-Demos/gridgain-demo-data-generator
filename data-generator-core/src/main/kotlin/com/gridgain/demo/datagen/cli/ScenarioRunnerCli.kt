@@ -7,6 +7,8 @@ import com.gridgain.demo.datagen.config.OtelSpec
 import com.gridgain.demo.datagen.config.ParsedConfiguration
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.TargetSpec
+import com.gridgain.demo.datagen.control.ControlListener
+import com.gridgain.demo.datagen.control.KafkaControlListener
 import com.gridgain.demo.datagen.coordinator.Coordinator
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
@@ -22,6 +24,7 @@ import com.gridgain.demo.datagen.observability.OtelInitializer
 import com.gridgain.demo.datagen.observability.RunLog
 import com.gridgain.demo.datagen.output.OutputLayout
 import com.gridgain.demo.datagen.runtime.RunId
+import com.gridgain.demo.datagen.scenario.ControllableRateLimiter
 import com.gridgain.demo.datagen.scenario.KeyRegistry
 import com.gridgain.demo.datagen.scenario.ScenarioResult
 import com.gridgain.demo.datagen.scenario.ScenarioRunner
@@ -176,23 +179,13 @@ object ScenarioRunnerCli {
         resolution.pendingEvents.forEach { runLog.emit(it) }
         resolution.pendingEvents.clear()
 
-        // Live throughput/latency export (opt-in via ops.yaml `metrics:`): the runner feeds per-op
-        // latency into the recorder; the reporter publishes a snapshot (~1s) to a Kafka topic for
-        // external consumers (e.g. the demo UI), so it works whether the generator runs in-cluster
-        // or local. Absent metrics block => recorder is a harmless no-op, no reporter, no Kafka dep used.
+        // Live throughput/latency counters. The runner feeds per-op latency in; the reporter (wired
+        // below, opt-in via ops.yaml `metrics:`) publishes snapshots for external consumers. Absent
+        // metrics block => the recorder is a harmless no-op nobody reads.
         val metricsRecorder = MetricsRecorder()
-        val metricsReporter = resolution.parsedConfig.ops.metrics?.let { m ->
-            LiveMetricsReporter(
-                recorder = metricsRecorder,
-                sink = KafkaMetricsSink(bootstrapServers = m.kafkaBootstrap, topic = m.topic),
-                targetTps = ScenarioRunner.configuredStartRate(resolution.scenario),
-                runId = runId,
-                intervalMs = m.intervalMs,
-            ).also {
-                it.start()
-                logger.lifecycle("live metrics: publishing to Kafka topic '${m.topic}' every ${m.intervalMs}ms")
-            }
-        }
+        // Both are built further down, once setup is complete — see the comment at their site.
+        var metricsReporter: LiveMetricsReporter? = null
+        var controlListener: ControlListener? = null
 
         try {
             resolution.coordinator?.let { coord ->
@@ -239,6 +232,49 @@ object ScenarioRunnerCli {
             val keyRegistry = KeyRegistry()
             if (loadedState != null) keyRegistry.restore(loadedState.keys)
 
+            // Built here, not earlier: a ramped/stepped schedule starts its clock at construction,
+            // so the limiter must not exist while provisioning and state loading are still running.
+            val rateLimiter = ControllableRateLimiter(
+                ScenarioRunner.buildRateLimiter(resolution.scenario)
+            )
+
+            // Live throughput/latency export (opt-in via ops.yaml `metrics:`): a snapshot ~1s to a
+            // Kafka topic for external consumers (e.g. the demo UI), so it works whether the
+            // generator runs in-cluster, local, or on a host. targetTps is read through the limiter
+            // so the snapshot tracks a ramp, a step, or a live override rather than the start rate.
+            metricsReporter = resolution.parsedConfig.ops.metrics?.let { m ->
+                LiveMetricsReporter(
+                    recorder = metricsRecorder,
+                    sink = KafkaMetricsSink(bootstrapServers = m.kafkaBootstrap, topic = m.topic),
+                    targetTps = rateLimiter::currentTargetTps,
+                    runGroup = parsed.runGroup,
+                    runId = runId,
+                    intervalMs = m.intervalMs,
+                ).also {
+                    it.start()
+                    logger.lifecycle("live metrics: publishing to Kafka topic '${m.topic}' every ${m.intervalMs}ms")
+                }
+            }
+
+            // Runtime rate control (opt-in via ops.yaml `control:`): lets an external driver raise
+            // and lower load without restarting the run. Started before run() so a command that
+            // arrives immediately is not missed.
+            controlListener = resolution.parsedConfig.ops.control?.let { c ->
+                KafkaControlListener(
+                    bootstrapServers = c.kafkaBootstrap,
+                    topic = c.topic,
+                    runGroup = parsed.runGroup,
+                    runId = runId,
+                    setRate = rateLimiter::setRate,
+                ).also {
+                    it.start()
+                    logger.lifecycle(
+                        "runtime control: listening on Kafka topic '${c.topic}' for run group " +
+                            "'${parsed.runGroup}'"
+                    )
+                }
+            }
+
             val runner = ScenarioRunner(
                 scenario = resolution.scenario,
                 data = resolution.parsedConfig.data,
@@ -248,6 +284,7 @@ object ScenarioRunnerCli {
                 instruments = resolution.instruments,
                 targetName = resolution.targetSpec.name,
                 metrics = metricsRecorder,
+                rateLimiter = rateLimiter,
             )
 
             runLog.emit(LifecycleEvent.ScenarioStarted(
@@ -310,7 +347,10 @@ object ScenarioRunnerCli {
 
             return result
         } finally {
-            // Stop the reporter first so it flushes a final inactive snapshot (observedTps→0),
+            // Control first: stop accepting commands before the run's machinery goes away, so a
+            // late command can't set a rate on a limiter nothing is reading any more.
+            runCatching { controlListener?.close() }
+            // Then the reporter, so it flushes a final inactive snapshot (observedTps→0),
             // letting a live consumer see the run end / a stepped-rate restart cleanly.
             runCatching { metricsReporter?.close() }
             runCatching { resolution.coordinator?.stop() }

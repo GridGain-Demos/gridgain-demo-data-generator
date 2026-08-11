@@ -9,11 +9,17 @@ package com.gridgain.demo.datagen.metrics
  *
  * A sink failure on any one tick is swallowed — a dropped metrics point self-heals on the next
  * interval and must never crash the generator run.
+ *
+ * [targetTps] is a supplier, not a value: the target moves during a run (a `ramped`/`stepped`
+ * schedule walks it, and the control channel can override it outright), so it must be sampled at
+ * emit time. Reading it once at construction would pin every snapshot to the run's start rate and
+ * make a requested-vs-achieved graph wrong.
  */
 class LiveMetricsReporter(
     private val recorder: MetricsRecorder,
     private val sink: MetricsSink,
-    private val targetTps: Double,
+    private val targetTps: () -> Double,
+    private val runGroup: String,
     private val runId: String,
     private val intervalMs: Long = 1_000L,
     private val clockMs: () -> Long = System::currentTimeMillis,
@@ -53,7 +59,8 @@ class LiveMetricsReporter(
         val cur = recorder.counters()
         val snapshot = LiveMetrics.computeSnapshot(
             prev = prev, cur = cur, intervalNanos = now - prevNanos,
-            targetTps = targetTps, runId = runId, nowMs = clockMs(), active = active,
+            targetTps = targetTps(), runGroup = runGroup, runId = runId,
+            nowMs = clockMs(), active = active,
         )
         prev = cur
         prevNanos = now
@@ -73,7 +80,10 @@ class LiveMetricsReporter(
                     avgLatencyMs = 0.0,
                     totalOps = cur.ops,
                     errorCount = cur.errors,
-                    targetTps = targetTps,
+                    // The run is over, so there is no target any more — reporting the last
+                    // requested rate here would leave a consumer's target line hanging above zero.
+                    targetTps = 0.0,
+                    runGroup = runGroup,
                     runId = runId,
                     active = false,
                 )

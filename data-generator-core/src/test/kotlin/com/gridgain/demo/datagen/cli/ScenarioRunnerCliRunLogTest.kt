@@ -72,6 +72,7 @@ class ScenarioRunnerCliRunLogTest {
             scenarioName = scenarioName,
             clusterEndpoints = endpoints,
             outputDir = outputDir,
+            runGroup = "test-group",
         )
     }
 }

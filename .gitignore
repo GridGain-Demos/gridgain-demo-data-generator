@@ -41,5 +41,13 @@ bin/
 ### VS Code ###
 .vscode/
 
+### Local git worktrees ###
+# Sibling checkouts of this repo's own branches. A nested worktree must never be
+# committed into the repo that owns it.
+.worktrees/
+
+### Tooling output ###
+graphify-out/
+
 ### Mac OS ###
 .DS_Store

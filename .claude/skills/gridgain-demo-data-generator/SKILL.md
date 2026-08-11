@@ -1,11 +1,11 @@
 ---
 name: gridgain-demo-data-generator
-description: How to USE the GridGain demo data generator — authoring ops.yaml/data.yaml, choosing rate kinds, transaction_scope, distribution (multi-pod), provisioning, and live metrics. Use when configuring or running a data-generator scenario, debugging generator throughput/errors, deciding how to load a GridGain cluster, or editing ops.yaml/data.yaml. Standalone component — it has no dependency on the gradle plugin or any demo.
+description: How to USE the GridGain demo data generator — authoring ops.yaml/data.yaml, choosing rate kinds, transaction_scope, distribution (multi-pod), provisioning, live metrics, and runtime rate control. Use when configuring or running a data-generator scenario, debugging generator throughput/errors, driving load up/down at runtime, deciding how to load a GridGain cluster, or editing ops.yaml/data.yaml. Standalone component — it has no dependency on the gradle plugin or any demo.
 ---
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-06-15*
+*Last updated: 2026-08-09*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -15,7 +15,7 @@ A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **
 
 | File | Purpose | Current schema_version |
 |------|---------|------------------------|
-| `ops.yaml` | targets, scenarios (rate/duration/scope), metrics, otel | **4** |
+| `ops.yaml` | targets, scenarios (rate/duration/scope), metrics, control, otel | **5** |
 | `data.yaml` | schemas → columns → value sources, FK relations | **2** |
 
 Both carry a `schema_version` and are **auto-migrated** forward before validation (`OpsConfigMigrationRunner`, `DataConfigMigrationRunner`). Validation failures are fatal with remediation text.
@@ -23,7 +23,7 @@ Both carry a `schema_version` and are **auto-migrated** forward before validatio
 ## ops.yaml
 
 ```yaml
-schema_version: 4
+schema_version: 5
 targets:
   - name: my-cluster          # referenced by scenario.target
     kind: gg8-kv              # gg8-kv | gg9-kv
@@ -32,6 +32,9 @@ metrics:                       # optional — live throughput/latency to Kafka (
   kafka_bootstrap: "kafka:9092"
   topic: "datagen-metrics"
   interval_ms: 1000
+control:                       # optional (v5+) — runtime rate control in (§Runtime control)
+  kafka_bootstrap: "kafka:9092"
+  topic: "datagen-control"
 otel:                          # optional — OpenTelemetry export (exporter: none|otlp|prometheus)
   exporter: otlp
   endpoint: http://collector:4317
@@ -103,11 +106,29 @@ schemas:
 ## Metrics
 
 - **OTel instruments** (always recorded): in-flight, op duration histogram, errors, target rate, observed/achieved rate — tagged by scenario/target/schema/operation. Exported per the `otel:` block.
-- **Live Kafka sink** (only when `metrics:` present): a JSON snapshot every `interval_ms` to the named topic — `observed_tps`, latency percentiles, `error_count`/rate, `run_id`. Consumers (e.g. a UI) subscribe to that topic for a live rate/latency feed without scraping Prometheus.
+- **Live Kafka sink** (only when `metrics:` present): a JSON snapshot every `interval_ms` to the named topic. Fields (camelCase on the wire, see `metrics/MetricsSnapshot.kt`): `observedTps`, `avgLatencyMs`, `totalOps`, `errorCount`, `targetTps`, `runGroup`, `runId`, `active`. Consumers (e.g. a UI) subscribe for a live rate/latency feed without scraping Prometheus.
+  - **`avgLatencyMs` is an interval *mean*, not a percentile.** No percentiles exist on this feed — `scenario/LatencyHistogram.kt` computes them only for stop conditions and exports nowhere. `errorCount` is cumulative, not a rate.
+  - **`targetTps` tracks the current target**, so it follows a `ramped`/`stepped` schedule and any live override — not the run's start rate.
+  - **Two ids.** `runId` is per *process*; each instance of a distributed run has its own, which is how a consumer counts live instances and expires a dead one. `runGroup` is shared by every instance launched together (`--run-group`) and is what a consumer aggregates and addresses by.
+  - Each instance emits a final `active=false` snapshot on clean stop. A killed process emits nothing (there is no SIGTERM handler), so consumers need their own staleness timeout.
+
+## Runtime control
+
+Only when `control:` is present (v5+). The generator consumes `ControlCommand` JSON from the named topic and adjusts its rate **without restarting** — this is how a UI drives load up and down mid-run.
+
+```json
+{"runGroup": "20260809T101500Z", "targetTpsPerInstance": 250.0, "issuedAtMs": 1754731200000}
+```
+
+- **`targetTpsPerInstance` is per instance, not the fleet total.** An instance cannot know how many peers are live, so the sender divides. `0.0` pauses the instance — it stays connected and keeps reporting, so graphs flatline rather than vanish.
+- An instance ignores commands whose `runGroup` is not its own, so one topic serves concurrent runs.
+- Every instance subscribes under a **unique consumer group**, so the topic broadcasts: one command reaches the whole fleet.
+- An override outranks the scenario's `rate:` schedule; the configured constant/ramp/step runs untouched until the first command arrives.
+- All three required fields must be present. A payload missing `targetTpsPerInstance` is rejected rather than defaulted — Jackson would fill it with `0.0`, silently pausing the fleet.
 
 ## CLI
 
-Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-gg9`; dispatcher `ScenarioRunnerCli`). It takes the scenario name + paths to `ops.yaml`, `data.yaml`, the client-endpoints file, and an output dir, plus an execution mode (local fork vs in-cluster). **Verify the exact flag names against `ScenarioRunnerCli` / the `*Main` classes before scripting** — the config files above are the stable contract; launch flags are an implementation detail.
+Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-gg9`; dispatcher `ScenarioRunnerCli`). It takes the scenario name + paths to `ops.yaml`, `data.yaml`, the client-endpoints file, an output dir, and **`--run-group <id>` (required)** — the id shared by every instance of one logical run (see §Metrics). All are required; a missing flag fails with a message naming it and the full expected invocation. **Verify the exact flag names against `ScenarioRunnerCli` / the `*Main` classes before scripting** — the config files above are the stable contract; launch flags are an implementation detail.
 
 ## Sources of truth (verify here when exact)
 
@@ -116,7 +137,8 @@ are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
 - version constants: `config/ConfiguredState.kt` (`CURRENT_OPS_SCHEMA_VERSION`, `CURRENT_DATA_SCHEMA_VERSION`)
 - migrations: the ops/data migration runner(s) + `Migrate*` step classes under `config/` (defer to the repo CLAUDE.md §Key files for exact filenames — both `ConfigMigration` and `OpsConfigMigrationRunner`/`DataConfigMigrationRunner` naming have appeared)
 - ops/data JSONSchema: `src/main/resources/schema/{ops,data}/` (per version)
-- rate limiters: `scenario/` (Constant/Ramped/Stepped)
+- rate limiters: `scenario/` (Constant/Ramped/Stepped, plus `ControllableRateLimiter` wrapping them for runtime override)
+- runtime control: `control/` (`ControlCommand`, `ControlListener`, `KafkaControlListener`)
 - transaction/atomicity rule: `target/Gg8KvTarget.kt` (gg8 module)
 - distribution/coordinator: `coordination/` package + the distribution validator
 - metrics: `observability/` + the live metrics reporter / Kafka sink
@@ -124,4 +146,4 @@ are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
 
 ## Maintenance
 
-This skill documents a moving target. **When you change the generator's config surface** — an ops/data schema field, a rate/value-source kind, `transaction_scope`/distribution semantics, the metrics block, or the CLI — **update this file in the same change and bump the *Last updated* date.** Prefer citing a source file over duplicating volatile detail. This rule is also recorded in this repo's `CLAUDE.md`.
+This skill documents a moving target. **When you change the generator's config surface** — an ops/data schema field, a rate/value-source kind, `transaction_scope`/distribution semantics, the metrics or control block, or the CLI — **update this file in the same change and bump the *Last updated* date.** Prefer citing a source file over duplicating volatile detail. This rule is also recorded in this repo's `CLAUDE.md`.

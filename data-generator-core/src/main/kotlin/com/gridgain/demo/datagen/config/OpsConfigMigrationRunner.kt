@@ -5,5 +5,6 @@ object OpsConfigMigrationRunner {
         MigrateOpsV1toV2(),
         MigrateOpsV2toV3(),
         MigrateOpsV3toV4(),
+        MigrateOpsV4toV5(),
     ))
 }

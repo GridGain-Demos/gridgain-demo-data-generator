@@ -5,9 +5,17 @@ import java.time.Duration
 interface RateLimiter {
     /** Block until the caller may proceed with the next operation. */
     fun acquire()
+
+    /**
+     * The rate (ops/sec) this limiter is currently pacing to. For scheduled limiters this changes
+     * over the life of the run, which is why it is a method rather than a construction-time value:
+     * the live-metrics snapshot and the OTel target-rate gauge report it every interval, so a
+     * requested-vs-achieved graph tracks a ramp or a step instead of flatlining at the start rate.
+     */
+    fun currentTargetTps(): Double
 }
 
-class ConstantRateLimiter(opsPerSecond: Double) : RateLimiter {
+class ConstantRateLimiter(private val opsPerSecond: Double) : RateLimiter {
     private val intervalNanos: Long = (1_000_000_000.0 / opsPerSecond).toLong()
     private var nextAllowedNanos: Long = System.nanoTime()
 
@@ -21,6 +29,8 @@ class ConstantRateLimiter(opsPerSecond: Double) : RateLimiter {
         }
         nextAllowedNanos = maxOf(nextAllowedNanos, now) + intervalNanos
     }
+
+    override fun currentTargetTps(): Double = opsPerSecond
 }
 
 class RampedRateLimiter(
@@ -32,6 +42,14 @@ class RampedRateLimiter(
     private val rampStartedNanos: Long = System.nanoTime()
     private var nextAllowedNanos: Long = rampStartedNanos
 
+    /** Linear interpolation across the ramp window; holds [toOpsPerSecond] once the window closes. */
+    private fun rateAt(nanos: Long): Double {
+        val elapsed = nanos - rampStartedNanos
+        if (elapsed >= rampDurationNanos) return toOpsPerSecond
+        val t: Double = elapsed.toDouble() / rampDurationNanos
+        return fromOpsPerSecond + t * (toOpsPerSecond - fromOpsPerSecond)
+    }
+
     override fun acquire() {
         val now = System.nanoTime()
         val sleep = nextAllowedNanos - now
@@ -39,16 +57,11 @@ class RampedRateLimiter(
             Thread.sleep(sleep / 1_000_000, (sleep % 1_000_000).toInt())
         }
         val effectiveNow = maxOf(nextAllowedNanos, now)
-        val elapsed = effectiveNow - rampStartedNanos
-        val rate: Double = if (elapsed >= rampDurationNanos) {
-            toOpsPerSecond
-        } else {
-            val t: Double = elapsed.toDouble() / rampDurationNanos
-            fromOpsPerSecond + t * (toOpsPerSecond - fromOpsPerSecond)
-        }
-        val intervalNanos: Long = (1_000_000_000.0 / rate).toLong()
+        val intervalNanos: Long = (1_000_000_000.0 / rateAt(effectiveNow)).toLong()
         nextAllowedNanos = effectiveNow + intervalNanos
     }
+
+    override fun currentTargetTps(): Double = rateAt(System.nanoTime())
 }
 
 data class StepConfig(val rate: Double, val hold: Duration)
@@ -64,10 +77,10 @@ class SteppedRateLimiter(steps: List<StepConfig>) : RateLimiter {
         }
     }
 
-    private data class Boundary(val endNanos: Long, val intervalNanos: Long)
+    private data class Boundary(val endNanos: Long, val rate: Double)
     private val rampStartedNanos: Long = System.nanoTime()
     private val boundaries: List<Boundary>
-    private val finalIntervalNanos: Long
+    private val finalRate: Double
     private var nextAllowedNanos: Long = rampStartedNanos
 
     init {
@@ -75,11 +88,15 @@ class SteppedRateLimiter(steps: List<StepConfig>) : RateLimiter {
         val list = mutableListOf<Boundary>()
         for (s in steps) {
             cumNanos += s.hold.toNanos()
-            list.add(Boundary(endNanos = rampStartedNanos + cumNanos, intervalNanos = (1_000_000_000.0 / s.rate).toLong()))
+            list.add(Boundary(endNanos = rampStartedNanos + cumNanos, rate = s.rate))
         }
         boundaries = list
-        finalIntervalNanos = (1_000_000_000.0 / steps.last().rate).toLong()
+        finalRate = steps.last().rate
     }
+
+    /** The step covering [nanos]; the last step's rate is held after the schedule runs out. */
+    private fun rateAt(nanos: Long): Double =
+        boundaries.firstOrNull { nanos < it.endNanos }?.rate ?: finalRate
 
     override fun acquire() {
         val now = System.nanoTime()
@@ -88,8 +105,9 @@ class SteppedRateLimiter(steps: List<StepConfig>) : RateLimiter {
             Thread.sleep(sleep / 1_000_000, (sleep % 1_000_000).toInt())
         }
         val effectiveNow = maxOf(nextAllowedNanos, now)
-        val intervalNanos: Long = boundaries.firstOrNull { effectiveNow < it.endNanos }?.intervalNanos
-            ?: finalIntervalNanos
+        val intervalNanos: Long = (1_000_000_000.0 / rateAt(effectiveNow)).toLong()
         nextAllowedNanos = effectiveNow + intervalNanos
     }
+
+    override fun currentTargetTps(): Double = rateAt(System.nanoTime())
 }

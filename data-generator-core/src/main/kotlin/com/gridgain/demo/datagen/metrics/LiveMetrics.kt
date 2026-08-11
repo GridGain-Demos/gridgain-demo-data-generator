@@ -1,7 +1,7 @@
 package com.gridgain.demo.datagen.metrics
 
 /** Pure derivation of a [MetricsSnapshot] from two cumulative counter reads. Kept separate from
- *  [LiveMetricsWriter] (which owns the clock, thread, and file IO) so the rate/latency math is
+ *  [LiveMetricsReporter] (which owns the clock, thread, and transport) so the rate/latency math is
  *  deterministically unit-testable. */
 object LiveMetrics {
 
@@ -10,6 +10,7 @@ object LiveMetrics {
         cur: MetricsRecorder.Counters,
         intervalNanos: Long,
         targetTps: Double,
+        runGroup: String,
         runId: String,
         nowMs: Long,
         active: Boolean,
@@ -27,6 +28,7 @@ object LiveMetrics {
             totalOps = cur.ops,
             errorCount = cur.errors,
             targetTps = targetTps,
+            runGroup = runGroup,
             runId = runId,
             active = active,
         )

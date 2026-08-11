@@ -32,8 +32,16 @@ class ScenarioRunner(
     private val instruments: Instruments = Instruments.noop(),
     private val targetName: String = "<unknown>",
     // Live throughput/latency counters. Defaults to a detached recorder no consumer reads, so
-    // the metric collection is opt-in by wiring a LiveMetricsWriter to the same instance.
+    // the metric collection is opt-in by wiring a LiveMetricsReporter to the same instance.
     private val metrics: MetricsRecorder = MetricsRecorder(),
+    /**
+     * Pacing for the run, wrapped so an external command can override it mid-flight. Injectable
+     * because the caller that wires the control channel needs a reference to the same instance
+     * before [run] is entered — a command may arrive at any point, including immediately. Its
+     * schedule clock starts at construction, so build it right before running.
+     */
+    val rateLimiter: ControllableRateLimiter =
+        ControllableRateLimiter(buildRateLimiter(scenario)),
 ) {
 
     private var totalAttempts: Long = 0L
@@ -51,9 +59,8 @@ class ScenarioRunner(
     }
 
     fun run(): ScenarioResult {
-        val rateLimiter = buildRateLimiter()
         val evaluator = StopConditionEvaluator(scenario.stopConditions)
-        instruments.targetRateRef.set(configuredStartRate(scenario))
+        instruments.targetRateRef.set(rateLimiter.currentTargetTps())
         totalAttempts = 0L
         startedNanos = System.nanoTime()
         val started = Instant.now()
@@ -107,6 +114,10 @@ class ScenarioRunner(
 
     private fun tick(rateLimiter: RateLimiter, evaluator: StopConditionEvaluator): Boolean {
         rateLimiter.acquire()
+        // Re-published every tick because the target moves: a ramp/step walks it, and the control
+        // channel can override it at any moment. One atomic store is nothing next to the round trip
+        // below, and it keeps the OTel gauge honest for the Grafana requested-vs-achieved panel.
+        instruments.targetRateRef.set(rateLimiter.currentTargetTps())
         val rootSchemaName = scenario.rootSchemas.first()  // multi-root weighting deferred
         val rootKeyColumn = keyColumnByName[rootSchemaName]!!
         val isRead = scenario.readRatio > 0.0 &&
@@ -190,21 +201,23 @@ class ScenarioRunner(
         return event
     }
 
-    private fun buildRateLimiter(): RateLimiter = when (val r = scenario.rate) {
-        is ConstantRateSpec -> ConstantRateLimiter(r.opsPerSecond)
-        is RampedRateSpec -> RampedRateLimiter(
-            fromOpsPerSecond = r.from, toOpsPerSecond = r.to,
-            rampDuration = Duration.parse(r.over),
-        )
-        is SteppedRateSpec -> SteppedRateLimiter(
-            steps = r.steps.map { StepConfig(rate = it.rate, hold = Duration.parse(it.hold)) },
-        )
-    }
-
     companion object {
+        /** Builds the limiter for the scenario's configured rate schedule. Public so a caller that
+         *  needs the [ControllableRateLimiter] wrapper before constructing the runner can build the
+         *  same thing the default would have. */
+        fun buildRateLimiter(scenario: ScenarioSpec): RateLimiter = when (val r = scenario.rate) {
+            is ConstantRateSpec -> ConstantRateLimiter(r.opsPerSecond)
+            is RampedRateSpec -> RampedRateLimiter(
+                fromOpsPerSecond = r.from, toOpsPerSecond = r.to,
+                rampDuration = Duration.parse(r.over),
+            )
+            is SteppedRateSpec -> SteppedRateLimiter(
+                steps = r.steps.map { StepConfig(rate = it.rate, hold = Duration.parse(it.hold)) },
+            )
+        }
+
         /** The scenario's initial target rate (ops/sec): the constant rate, a ramp's start
-         *  value, or the first step. Seeds both the OTel target-rate gauge and the live-metrics
-         *  `targetTps` so a graph can show requested-vs-achieved. */
+         *  value, or the first step. */
         fun configuredStartRate(scenario: ScenarioSpec): Double = when (val r = scenario.rate) {
             is ConstantRateSpec -> r.opsPerSecond
             is RampedRateSpec -> r.from
