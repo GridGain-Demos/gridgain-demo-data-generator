@@ -31,6 +31,11 @@ dependencies {
     // (not api) so consumers don't inherit it; only active when ops.yaml declares a metrics block.
     implementation("org.apache.kafka:kafka-clients:3.8.0")
 
+    // HdrHistogram for the whole-run latency histogram published on the metrics topic. `api` (not
+    // implementation) because the encoded histogram is part of the wire contract: a consumer that
+    // decodes a snapshot needs the same library, and the UI does exactly that.
+    api("org.hdrhistogram:HdrHistogram:2.2.2")
+
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation("org.assertj:assertj-core:3.25.3")
     testImplementation("org.slf4j:slf4j-simple:2.0.13")
