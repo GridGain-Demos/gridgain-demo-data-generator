@@ -5,7 +5,7 @@ description: How to USE the GridGain demo data generator — authoring ops.yaml/
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-08-09*
+*Last updated: 2026-08-18*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -15,7 +15,7 @@ A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **
 
 | File | Purpose | Current schema_version |
 |------|---------|------------------------|
-| `ops.yaml` | targets, scenarios (rate/duration/scope), metrics, control, otel | **5** |
+| `ops.yaml` | targets, scenarios (rate/duration/scope), metrics, control, otel | **6** |
 | `data.yaml` | schemas → columns → value sources, FK relations | **2** |
 
 Both carry a `schema_version` and are **auto-migrated** forward before validation (`OpsConfigMigrationRunner`, `DataConfigMigrationRunner`). Validation failures are fatal with remediation text.
@@ -23,7 +23,7 @@ Both carry a `schema_version` and are **auto-migrated** forward before validatio
 ## ops.yaml
 
 ```yaml
-schema_version: 5
+schema_version: 6
 targets:
   - name: my-cluster          # referenced by scenario.target
     kind: gg8-kv              # gg8-kv | gg9-kv
@@ -32,6 +32,8 @@ metrics:                       # optional — live throughput/latency to Kafka (
   kafka_bootstrap: "kafka:9092"
   topic: "datagen-metrics"
   interval_ms: 1000
+  histogram_highest_ms: 60000        # required from v6 — latency histogram ceiling
+  histogram_significant_digits: 3    # required from v6 — HdrHistogram precision (1-4)
 control:                       # optional (v5+) — runtime rate control in (§Runtime control)
   kafka_bootstrap: "kafka:9092"
   topic: "datagen-control"
@@ -102,15 +104,20 @@ schemas:
 4. **Schema name = cache name.** A `data.yaml` schema named `account` writes to a GG cache/table literally named `account` — **not** `SQL_PUBLIC_ACCOUNT`. If a consumer reads from SQL-created `SQL_PUBLIC_*` caches, generator load won't appear there unless the schema names and key/value shapes are aligned to those caches.
 5. **Durations are ISO-8601** (`java.time.Duration`): `PT10M`, not `10m` (`DateTimeParseException`).
 6. **Single-thread per pod.** One pod is bounded by GG round-trip latency, so raising `ops_per_second` alone plateaus — add pods (`replicas`) to push more total throughput.
+7. **ops `schema_version: 6` needs a generator built at or after 2026-08-18.** v6 makes `histogram_highest_ms` and `histogram_significant_digits` required inside `metrics:`. An older archive refuses the file outright ("only supports up to schema_version 5"), and a newer generator refuses a v6 `metrics:` block that omits either key. `MigrateOpsV5toV6` fills both in automatically — but it rewrites the file through SnakeYAML and **drops every comment**, so a hand-commented `ops.yaml` should be hand-edited instead. `histogram_significant_digits` is capped at 4: cost is ~100x per extra digit, and 5 would mean ~21 MB/sec of allocation per instance.
 
 ## Metrics
 
 - **OTel instruments** (always recorded): in-flight, op duration histogram, errors, target rate, observed/achieved rate — tagged by scenario/target/schema/operation. Exported per the `otel:` block.
-- **Live Kafka sink** (only when `metrics:` present): a JSON snapshot every `interval_ms` to the named topic. Fields (camelCase on the wire, see `metrics/MetricsSnapshot.kt`): `observedTps`, `avgLatencyMs`, `totalOps`, `errorCount`, `targetTps`, `runGroup`, `runId`, `active`. Consumers (e.g. a UI) subscribe for a live rate/latency feed without scraping Prometheus.
-  - **`avgLatencyMs` is an interval *mean*, not a percentile.** No percentiles exist on this feed — `scenario/LatencyHistogram.kt` computes them only for stop conditions and exports nowhere. `errorCount` is cumulative, not a rate.
+- **Live Kafka sink** (only when `metrics:` present): a JSON snapshot every `interval_ms` to the named topic. Fields (camelCase on the wire, see `metrics/MetricsSnapshot.kt`): `observedTps`, `avgLatencyMs`, `totalOps`, `errorCount`, `runAvgTps`, `runAvgLatencyMs`, `runLatencyHistogram`, `targetTps`, `runGroup`, `runId`, `active`. Consumers (e.g. a UI) subscribe for a live rate/latency feed without scraping Prometheus.
+  - **`observedTps`/`avgLatencyMs` are interval figures; `runAvgTps`/`runAvgLatencyMs` are whole-run.** The first pair makes a live graph track current load; the second pair is what an end-of-run summary reports.
+  - **`avgLatencyMs` is an interval *mean*, not a percentile.** No scalar percentiles are on this feed. What *is* on it is `runLatencyHistogram` — the instance's whole-run HdrHistogram, compressed encoding, base64, **microseconds** — which a consumer reads any percentile off. Sized by `histogram_highest_ms`/`histogram_significant_digits`; an operation slower than the ceiling is clamped to it, not dropped, so a p99 pinned at the ceiling reads as "slower than we can measure".
+  - **Merge histograms, never average percentiles.** Percentiles do not compose: the max p90 across a fleet's instances is the worst instance's p90, not the fleet's. Decode each instance's histogram and `add()` them, then read the percentile off the merged result.
+  - `scenario/LatencyHistogram.kt` is a *different*, unbounded histogram used only for stop conditions and exported nowhere — do not confuse the two. `errorCount` is cumulative, not a rate.
   - **`targetTps` tracks the current target**, so it follows a `ramped`/`stepped` schedule and any live override — not the run's start rate.
   - **Two ids.** `runId` is per *process*; each instance of a distributed run has its own, which is how a consumer counts live instances and expires a dead one. `runGroup` is shared by every instance launched together (`--run-group`) and is what a consumer aggregates and addresses by.
-  - Each instance emits a final `active=false` snapshot on clean stop. A killed process emits nothing (there is no SIGTERM handler), so consumers need their own staleness timeout.
+  - Each instance emits a final `active=false` snapshot on clean stop, carrying its whole-run figures and final histogram. A killed process emits nothing (there is no SIGTERM handler) — but because the histogram rides on *every* tick, the last tick received is still a usable summary. Consumers need their own staleness timeout regardless.
+  - **Wire cost:** roughly 5–30 KB per instance per second at the recommended bounds, republished each tick because the histogram is cumulative. It grows with the spread of buckets touched and the variance in their counts, not with run length, so it plateaus. Well inside Kafka's 1 MB default `max.request.size`.
 
 ## Runtime control
 
@@ -134,14 +141,14 @@ Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-
 
 This repo's own `CLAUDE.md` (§Key files) is the canonical file map — defer to it. References below
 are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
-- version constants: `config/ConfiguredState.kt` (`CURRENT_OPS_SCHEMA_VERSION`, `CURRENT_DATA_SCHEMA_VERSION`)
+- version constants: `config/ConfiguredVersions.kt` (`CURRENT_OPS_SCHEMA_VERSION`, `CURRENT_DATA_SCHEMA_VERSION`)
 - migrations: the ops/data migration runner(s) + `Migrate*` step classes under `config/` (defer to the repo CLAUDE.md §Key files for exact filenames — both `ConfigMigration` and `OpsConfigMigrationRunner`/`DataConfigMigrationRunner` naming have appeared)
 - ops/data JSONSchema: `src/main/resources/schema/{ops,data}/` (per version)
 - rate limiters: `scenario/` (Constant/Ramped/Stepped, plus `ControllableRateLimiter` wrapping them for runtime override)
 - runtime control: `control/` (`ControlCommand`, `ControlListener`, `KafkaControlListener`)
 - transaction/atomicity rule: `target/Gg8KvTarget.kt` (gg8 module)
 - distribution/coordinator: `coordination/` package + the distribution validator
-- metrics: `observability/` + the live metrics reporter / Kafka sink
+- metrics: `metrics/` — `MetricsSnapshot`, `LiveMetricsReporter`, `KafkaMetricsSink`, `LatencyHistogramBounds`, `HistogramCodec`. OTel instruments (a separate, always-on export) are under `observability/`.
 - CLI: `cli/` package (`ScenarioRunnerCli` dispatcher + the `*Main` entry points)
 
 ## Maintenance
