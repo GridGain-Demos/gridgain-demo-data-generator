@@ -40,6 +40,10 @@ class LatencyHistogramBoundsTest {
             e.message!!.contains("metrics.histogram_highest_ms"),
             "message should name the config key: ${e.message}",
         )
+        assertTrue(
+            e.message!!.contains("recommended value"),
+            "message should say how to fix it, not only what is wrong: ${e.message}",
+        )
     }
 
     @Test
