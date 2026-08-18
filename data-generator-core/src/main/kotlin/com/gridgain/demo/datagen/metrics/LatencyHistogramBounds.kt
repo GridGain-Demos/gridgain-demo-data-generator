@@ -12,6 +12,8 @@ package com.gridgain.demo.datagen.metrics
  * throw away the sub-millisecond resolution a local run actually shows; nanoseconds would need a
  * range a thousand times wider for no gain, because three significant digits at nanosecond scale is
  * far finer than the clock. [highestTrackableMicros] converts the configured millisecond bound.
+ * The same truncation creates a floor: [MetricsRecorder.record]'s `latencyNanos / 1_000L` sends
+ * anything under 1 microsecond to bucket 0, indistinguishable from a true zero-latency op.
  */
 data class LatencyHistogramBounds(
     /** Longest operation the histogram can record, in milliseconds. */
@@ -31,11 +33,11 @@ data class LatencyHistogramBounds(
                 "microseconds HdrHistogram tracks in overflows. This is a vastly higher ceiling " +
                 "than any real operation needs — 60000, one minute, is the recommended value."
         }
-        require(significantDigits in 1..5) {
-            "metrics.histogram_significant_digits must be between 1 and 5; got $significantDigits. " +
+        require(significantDigits in 1..4) {
+            "metrics.histogram_significant_digits must be between 1 and 4; got $significantDigits. " +
                 "It is HdrHistogram's precision in significant decimal digits: 3 gives 0.1% error " +
-                "and is the recommended value. Above 5 the histogram's memory grows for precision " +
-                "no load test can use."
+                "and is the recommended value. Above 4 the histogram's memory grows roughly 100x " +
+                "per extra digit for precision no load test can use."
         }
     }
 

@@ -79,10 +79,29 @@ class LatencyHistogramBoundsTest {
     }
 
     @Test
-    fun `significantDigits of five is the maximum accepted value`() {
-        val bounds = LatencyHistogramBounds(highestMs = 60_000L, significantDigits = 5)
+    fun `significantDigits of four is the maximum accepted value`() {
+        val bounds = LatencyHistogramBounds(highestMs = 60_000L, significantDigits = 4)
 
-        assertEquals(5, bounds.significantDigits)
+        assertEquals(4, bounds.significantDigits)
+    }
+
+    @Test
+    fun `significantDigits of five is rejected`() {
+        // 5 used to be the accepted maximum; capped at 4 because a 5th digit costs roughly 100x
+        // more histogram memory per tick for precision no load test can use. The v6 ops JSONSchema
+        // caps at 4 too, and the two must agree.
+        val e = assertThrows<IllegalArgumentException> {
+            LatencyHistogramBounds(highestMs = 60_000L, significantDigits = 5)
+        }
+
+        assertTrue(
+            e.message!!.contains("metrics.histogram_significant_digits"),
+            "message should name the config key: ${e.message}",
+        )
+        assertTrue(
+            e.message!!.contains("between 1 and 4"),
+            "message should name the new upper bound: ${e.message}",
+        )
     }
 
     @Test

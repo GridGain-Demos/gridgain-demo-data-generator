@@ -26,10 +26,10 @@ import org.HdrHistogram.Histogram
  * True only for a recorder built via [detached] — never inferred from [bounds] having the same
  * values [LatencyHistogramBounds.detached] happens to produce, because those are also the
  * JSONSchema-recommended values, and a real `metrics:` block using them must not be mistaken for
- * the sentinel. Nothing in this class reads the flag; it exists so that whatever wires a
- * [LiveMetricsReporter] or an encode of [histogramSnapshot] to a recorder can `require(!isDetached)`
- * first, catching a future refactor that attaches a sink to the no-op default instead of a
- * configured recorder. That guard belongs at the wiring call site, not here.
+ * the sentinel. Nothing in this class reads the flag; it exists so that a caller wiring a
+ * [LiveMetricsReporter] to a recorder, or encoding its [histogramSnapshot], can
+ * `require(!isDetached)` first, catching a future refactor that attaches a sink to the no-op
+ * default instead of a configured recorder. That guard belongs at the wiring call site, not here.
  */
 class MetricsRecorder private constructor(
     private val bounds: LatencyHistogramBounds,
@@ -51,11 +51,11 @@ class MetricsRecorder private constructor(
         this.latencyNanos.addAndGet(latencyNanos)
         if (!success) errors.incrementAndGet()
         // Clamped, not dropped and not allowed to throw. HdrHistogram rejects a value above the
-        // configured bound, and killing a generator run because one operation was unusually slow is
-        // strictly worse than a p99 pinned at the ceiling — which is the honest reading of "slower
-        // than the configured bound can measure" anyway.
+        // configured bound (or below zero), and killing a generator run because one operation was
+        // unusually slow is strictly worse than a p99 pinned at the ceiling — which is the honest
+        // reading of "slower than the configured bound can measure" anyway.
         histogram.recordValue(
-            (latencyNanos / 1_000L).coerceAtMost(bounds.highestTrackableMicros)
+            (latencyNanos / 1_000L).coerceIn(0L, bounds.highestTrackableMicros)
         )
     }
 

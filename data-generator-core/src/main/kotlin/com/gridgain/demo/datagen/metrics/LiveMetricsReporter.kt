@@ -36,14 +36,8 @@ class LiveMetricsReporter(
 ) : AutoCloseable {
 
     init {
-        // A detached recorder's bounds are the shape of an object with no reader (see
-        // LatencyHistogramBounds.detached). Wiring a reporter to one makes it read, at which point
-        // those bounds silently become a configuration default — the thing CLAUDE.md forbids — and a
-        // run would report a p99 clamped at 60s as though it had been measured.
-        //
-        // A value check could not catch this: detached() deliberately produces the same 60000/3 the
-        // JSONSchema recommends, so a real `metrics:` block using the recommended values is
-        // indistinguishable by value. Only provenance distinguishes them, which is what isDetached is.
+        // See MetricsRecorder.isDetached for the full rationale: only provenance distinguishes a
+        // detached recorder from a configured one, since both can carry the same bounds.
         require(!recorder.isDetached) {
             "A LiveMetricsReporter was attached to a detached MetricsRecorder, whose histogram bounds " +
                 "came from no configuration. Build the recorder from the `metrics:` block of ops.yaml " +

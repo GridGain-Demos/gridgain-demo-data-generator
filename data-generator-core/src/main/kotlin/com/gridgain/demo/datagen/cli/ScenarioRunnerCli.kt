@@ -16,6 +16,7 @@ import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
 import com.gridgain.demo.datagen.metrics.KafkaMetricsSink
+import com.gridgain.demo.datagen.metrics.LatencyHistogramBounds
 import com.gridgain.demo.datagen.metrics.LiveMetricsReporter
 import com.gridgain.demo.datagen.metrics.MetricsRecorder
 import com.gridgain.demo.datagen.observability.Instruments
@@ -182,7 +183,19 @@ object ScenarioRunnerCli {
         // Live throughput/latency counters. The runner feeds per-op latency in; the reporter (wired
         // below, opt-in via ops.yaml `metrics:`) publishes snapshots for external consumers. Absent
         // metrics block => the recorder is a harmless no-op nobody reads.
-        val metricsRecorder = MetricsRecorder.detached()
+        // The histogram bounds come from the metrics block because that is the only case where the
+        // histogram is read: a detached recorder's bounds are the shape of an object with no reader,
+        // not a configuration default. See LatencyHistogramBounds.detached.
+        val metricsRecorder = resolution.parsedConfig.ops.metrics
+            ?.let {
+                MetricsRecorder(
+                    LatencyHistogramBounds(
+                        highestMs = it.histogramHighestMs,
+                        significantDigits = it.histogramSignificantDigits,
+                    )
+                )
+            }
+            ?: MetricsRecorder.detached()
         // Both are built further down, once setup is complete — see the comment at their site.
         var metricsReporter: LiveMetricsReporter? = null
         var controlListener: ControlListener? = null
@@ -252,7 +265,11 @@ object ScenarioRunnerCli {
                     intervalMs = m.intervalMs,
                 ).also {
                     it.start()
-                    logger.lifecycle("live metrics: publishing to Kafka topic '${m.topic}' every ${m.intervalMs}ms")
+                    logger.lifecycle(
+                        "live metrics: publishing to Kafka topic '${m.topic}' every ${m.intervalMs}ms " +
+                            "(latency histogram: ${m.histogramHighestMs}ms ceiling, " +
+                            "${m.histogramSignificantDigits} significant digits)"
+                    )
                 }
             }
 

@@ -1,6 +1,7 @@
 package com.gridgain.demo.datagen.metrics
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -78,6 +79,27 @@ class MetricsRecorderHistogramTest {
 
     @Test
     fun `a fresh recorder yields an empty histogram rather than throwing`() {
-        assertTrue(recorder().histogramSnapshot().totalCount == 0L)
+        assertEquals(0L, recorder().histogramSnapshot().totalCount)
+    }
+
+    @Test
+    fun `isDetached reflects construction path, not a coincidence of bounds`() {
+        assertTrue(MetricsRecorder.detached().isDetached, "detached() must report isDetached")
+        assertFalse(recorder().isDetached, "a recorder built from real bounds must not be detached")
+    }
+
+    @Test
+    fun `a latency exactly at the histogram ceiling is recorded exactly, not clamped down by one`() {
+        // Chosen so the ceiling (1000 microseconds) falls inside HdrHistogram's exact-resolution
+        // range for 3 significant digits, so an off-by-one clamp (coerceAtMost(ceiling - 1)) would
+        // show up as a different recorded value rather than being absorbed by bucket rounding.
+        val bounds = LatencyHistogramBounds(highestMs = 1L, significantDigits = 3)
+        val r = MetricsRecorder(bounds)
+
+        r.record(latencyNanos = bounds.highestTrackableMicros * 1_000L, success = true)
+
+        val h = r.histogramSnapshot()
+        assertEquals(1L, h.totalCount)
+        assertEquals(bounds.highestTrackableMicros, h.getValueAtPercentile(100.0))
     }
 }
