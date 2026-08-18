@@ -10,6 +10,15 @@ package com.gridgain.demo.datagen.metrics
  * A sink failure on any one tick is swallowed — a dropped metrics point self-heals on the next
  * interval and must never crash the generator run.
  *
+ * The histogram is encoded on **every** tick, not only on the final `active=false` snapshot. There
+ * is no SIGTERM handler, so a deleted pod never says goodbye — per-tick publishing means a killed
+ * run still leaves a last-known-good summary behind.
+ *
+ * The cost is roughly 5-30 KB per instance per second at the recommended bounds, republished each
+ * tick because the histogram is cumulative. It grows with the spread of latency buckets touched and
+ * the variance in their counts, not with run length, so it plateaus rather than climbing all run.
+ * Well inside Kafka's 1 MB default `max.request.size`, which `KafkaMetricsSink` does not override.
+ *
  * [targetTps] is a supplier, not a value: the target moves during a run (a `ramped`/`stepped`
  * schedule walks it, and the control channel can override it outright), so it must be sampled at
  * emit time. Reading it once at construction would pin every snapshot to the run's start rate and
@@ -26,12 +35,34 @@ class LiveMetricsReporter(
     private val nanoTime: () -> Long = System::nanoTime,
 ) : AutoCloseable {
 
+    init {
+        // A detached recorder's bounds are the shape of an object with no reader (see
+        // LatencyHistogramBounds.detached). Wiring a reporter to one makes it read, at which point
+        // those bounds silently become a configuration default — the thing CLAUDE.md forbids — and a
+        // run would report a p99 clamped at 60s as though it had been measured.
+        //
+        // A value check could not catch this: detached() deliberately produces the same 60000/3 the
+        // JSONSchema recommends, so a real `metrics:` block using the recommended values is
+        // indistinguishable by value. Only provenance distinguishes them, which is what isDetached is.
+        require(!recorder.isDetached) {
+            "A LiveMetricsReporter was attached to a detached MetricsRecorder, whose histogram bounds " +
+                "came from no configuration. Build the recorder from the `metrics:` block of ops.yaml " +
+                "instead: MetricsRecorder(LatencyHistogramBounds(spec.histogramHighestMs, " +
+                "spec.histogramSignificantDigits)). MetricsRecorder.detached() is only for a recorder " +
+                "nobody reads."
+        }
+    }
+
     @Volatile private var running = false
     private var thread: Thread? = null
 
     // Diff baseline — only touched by the reporter thread (and a test, single-threaded).
     private var prev: MetricsRecorder.Counters = recorder.counters()
     private var prevNanos: Long = nanoTime()
+
+    // Run-start baseline, fixed for the life of the reporter. The whole-run rate divides lifetime
+    // ops by elapsed time since *this* instant, so it must not move with the diff baseline.
+    private val runStartNanos: Long = nanoTime()
 
     fun start() {
         running = true
@@ -59,6 +90,8 @@ class LiveMetricsReporter(
         val cur = recorder.counters()
         val snapshot = LiveMetrics.computeSnapshot(
             prev = prev, cur = cur, intervalNanos = now - prevNanos,
+            runElapsedNanos = now - runStartNanos,
+            runLatencyHistogram = HistogramCodec.encode(recorder.histogramSnapshot()),
             targetTps = targetTps(), runGroup = runGroup, runId = runId,
             nowMs = clockMs(), active = active,
         )
@@ -71,24 +104,20 @@ class LiveMetricsReporter(
         running = false
         thread?.interrupt()
         thread?.join(2_000)
+        val now = nanoTime()
         val cur = recorder.counters()
-        runCatching {
-            sink.emit(
-                MetricsSnapshot(
-                    updatedAtMs = clockMs(),
-                    observedTps = 0.0,
-                    avgLatencyMs = 0.0,
-                    totalOps = cur.ops,
-                    errorCount = cur.errors,
-                    // The run is over, so there is no target any more — reporting the last
-                    // requested rate here would leave a consumer's target line hanging above zero.
-                    targetTps = 0.0,
-                    runGroup = runGroup,
-                    runId = runId,
-                    active = false,
-                )
-            )
-        }
+        // prev = cur and intervalNanos = 0L reproduce the same zero interval rate and zero interval
+        // latency this used to hand-write, but now through the one shared arithmetic home instead of
+        // a second copy of it. targetTps is zeroed because the run is over — reporting the last
+        // requested rate would leave a consumer's target line hanging above zero.
+        val snapshot = LiveMetrics.computeSnapshot(
+            prev = cur, cur = cur, intervalNanos = 0L,
+            runElapsedNanos = now - runStartNanos,
+            runLatencyHistogram = HistogramCodec.encode(recorder.histogramSnapshot()),
+            targetTps = 0.0, runGroup = runGroup, runId = runId,
+            nowMs = clockMs(), active = false,
+        )
+        runCatching { sink.emit(snapshot) }
         runCatching { (sink as? AutoCloseable)?.close() }
     }
 }
