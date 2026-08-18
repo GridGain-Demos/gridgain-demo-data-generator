@@ -16,7 +16,7 @@ class LiveMetricsReporterTest {
 
     @Test
     fun `reports interval throughput and average latency to the sink`() {
-        val recorder = MetricsRecorder()
+        val recorder = MetricsRecorder.detached()
         val sink = CapturingSink()
         var nanos = 0L
         val reporter = LiveMetricsReporter(
@@ -40,7 +40,7 @@ class LiveMetricsReporterTest {
 
     @Test
     fun `samples the target rate at emit time so a moving target is reported`() {
-        val recorder = MetricsRecorder()
+        val recorder = MetricsRecorder.detached()
         val sink = CapturingSink()
         var target = 50.0
         var nanos = 0L
@@ -61,7 +61,7 @@ class LiveMetricsReporterTest {
 
     @Test
     fun `close emits a final inactive snapshot with no target`() {
-        val recorder = MetricsRecorder()
+        val recorder = MetricsRecorder.detached()
         val sink = CapturingSink()
         val reporter = LiveMetricsReporter(
             recorder, sink, targetTps = { 10.0 }, runGroup = "g", runId = "r", clockMs = { 7L },

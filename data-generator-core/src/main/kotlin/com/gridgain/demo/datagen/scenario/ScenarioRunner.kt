@@ -33,7 +33,7 @@ class ScenarioRunner(
     private val targetName: String = "<unknown>",
     // Live throughput/latency counters. Defaults to a detached recorder no consumer reads, so
     // the metric collection is opt-in by wiring a LiveMetricsReporter to the same instance.
-    private val metrics: MetricsRecorder = MetricsRecorder(),
+    private val metrics: MetricsRecorder = MetricsRecorder.detached(),
     /**
      * Pacing for the run, wrapped so an external command can override it mid-flight. Injectable
      * because the caller that wires the control channel needs a reference to the same instance

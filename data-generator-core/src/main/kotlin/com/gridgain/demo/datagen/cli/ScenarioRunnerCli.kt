@@ -182,7 +182,7 @@ object ScenarioRunnerCli {
         // Live throughput/latency counters. The runner feeds per-op latency in; the reporter (wired
         // below, opt-in via ops.yaml `metrics:`) publishes snapshots for external consumers. Absent
         // metrics block => the recorder is a harmless no-op nobody reads.
-        val metricsRecorder = MetricsRecorder()
+        val metricsRecorder = MetricsRecorder.detached()
         // Both are built further down, once setup is complete — see the comment at their site.
         var metricsReporter: LiveMetricsReporter? = null
         var controlListener: ControlListener? = null
