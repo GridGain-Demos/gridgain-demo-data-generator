@@ -19,7 +19,16 @@ import org.HdrHistogram.Histogram
  */
 object HistogramCodec {
 
-    /** Base64 of [histogram]'s compressed encoding. Cheap enough to call on every metrics tick. */
+    /**
+     * Base64 of [histogram]'s compressed encoding.
+     *
+     * The buffer this allocates scales with the histogram's significant-digits precision (see
+     * [LatencyHistogramBounds]), not with how many samples it recorded. At the recommended 3
+     * digits the buffer is about 156 KB — cheap enough to call on every metrics tick. At the
+     * configurable maximum of 5 digits it grows to about 11.8 MB per call to hold ~280 KB of
+     * actual output — still safe, but no longer "cheap"; that is one more reason 3 is the
+     * recommended value, not just the default.
+     */
     fun encode(histogram: AbstractHistogram): String {
         val buffer = ByteBuffer.allocate(histogram.neededByteBufferCapacity)
         histogram.encodeIntoCompressedByteBuffer(buffer)
@@ -49,10 +58,16 @@ object HistogramCodec {
         return try {
             Histogram.decodeFromCompressedByteBuffer(ByteBuffer.wrap(bytes), 0L)
         } catch (e: Exception) {
+            // Not classified further: the exception type doesn't reliably distinguish these causes
+            // (an empty/absent field and a truncated message both surface as a null-message
+            // BufferUnderflowException or ArrayIndexOutOfBoundsException), so naming all three
+            // candidates is more honest than guessing which one happened.
+            val detail = e.message ?: e::class.java.simpleName
             throw IllegalArgumentException(
                 "Latency histogram base64 decoded, but its ${bytes.size} bytes are not an " +
-                    "HdrHistogram compressed encoding (${e.message}). The publisher and consumer " +
-                    "disagree on the wire format — check both are on the same HdrHistogram major.",
+                    "HdrHistogram compressed encoding ($detail). Likely causes: the histogram field " +
+                    "was empty or missing before encoding, the message was truncated in transit, or " +
+                    "the publisher and consumer are on different HdrHistogram majors.",
                 e,
             )
         }

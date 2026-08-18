@@ -25,6 +25,12 @@ data class LatencyHistogramBounds(
                 "longest single operation the run's latency histogram can record — set it above " +
                 "the slowest operation you expect (60000, one minute, is the recommended value)."
         }
+        require(highestMs <= MAX_HIGHEST_MS) {
+            "metrics.histogram_highest_ms must be at most $MAX_HIGHEST_MS (Long.MAX_VALUE " +
+                "expressed in microseconds); got $highestMs. Above that bound, converting to the " +
+                "microseconds HdrHistogram tracks in overflows. This is a vastly higher ceiling " +
+                "than any real operation needs — 60000, one minute, is the recommended value."
+        }
         require(significantDigits in 1..5) {
             "metrics.histogram_significant_digits must be between 1 and 5; got $significantDigits. " +
                 "It is HdrHistogram's precision in significant decimal digits: 3 gives 0.1% error " +
@@ -37,6 +43,9 @@ data class LatencyHistogramBounds(
     val highestTrackableMicros: Long get() = highestMs * 1_000L
 
     companion object {
+        /** The largest [highestMs] that converts to microseconds without overflowing a [Long]. */
+        private const val MAX_HIGHEST_MS: Long = Long.MAX_VALUE / 1_000L
+
         /**
          * Bounds for a recorder no consumer reads.
          *
@@ -44,8 +53,8 @@ data class LatencyHistogramBounds(
          * [MetricsRecorder] so metrics collection stays opt-in by wiring a reporter to the same
          * instance. That recorder's histogram is never encoded or queried, so these are not a
          * configuration default standing in for a missing `metrics:` block — they are the shape of
-         * an object with no reader. The production path always builds bounds from [MetricsSpec];
-         * see `ScenarioRunnerCli`.
+         * an object with no reader. The production path always builds bounds from
+         * [com.gridgain.demo.datagen.config.MetricsSpec]; see `ScenarioRunnerCli`.
          */
         fun detached(): LatencyHistogramBounds =
             LatencyHistogramBounds(highestMs = 60_000L, significantDigits = 3)
