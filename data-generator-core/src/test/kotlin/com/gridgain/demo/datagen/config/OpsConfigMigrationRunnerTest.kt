@@ -206,4 +206,33 @@ class OpsConfigMigrationRunnerTest {
             .ensureCurrentVersion(file.toFile(), targetVersion = CURRENT_OPS_SCHEMA_VERSION, logger = logger)
         assertThat(text).contains("schema_version: $CURRENT_OPS_SCHEMA_VERSION")
     }
+
+    @Test
+    fun `migrates a v6 file with targets all the way to v7`(@TempDir dir: Path) {
+        val file = dir.resolve("ops.yaml").also {
+            it.writeText(
+                """
+                schema_version: 6
+                targets:
+                  - name: t1
+                    kind: gg8-kv
+                    cluster_name: prod-gg8
+                scenarios:
+                  - name: load
+                    target: t1
+                    root_schemas: [customer]
+                    rate: { kind: constant, ops_per_second: 10 }
+                    duration: { kind: count, value: 5 }
+                    read_ratio: 0.0
+                """.trimIndent()
+            )
+        }
+
+        val text = OpsConfigMigrationRunner.create()
+            .ensureCurrentVersion(file.toFile(), targetVersion = CURRENT_OPS_SCHEMA_VERSION, logger = logger)
+
+        assertThat(text).contains("schema_version: 7")
+        assertThat(text).doesNotContain("targets")
+        assertThat(text).doesNotContain("target:")
+    }
 }

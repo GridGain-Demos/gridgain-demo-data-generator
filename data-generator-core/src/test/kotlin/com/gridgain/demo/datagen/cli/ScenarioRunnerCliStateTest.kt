@@ -82,6 +82,7 @@ class ScenarioRunnerCliStateTest {
             clusterEndpoints = endpoints,
             outputDir = outputDir,
             runGroup = "test-group",
+            targetCluster = "test-cluster",
         )
     }
 }

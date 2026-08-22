@@ -18,6 +18,13 @@ data class CliArgs(
      */
     val runGroup: String,
     /**
+     * The cluster this run writes to, resolved against `client-endpoints.yaml`. Supplied per run
+     * rather than per file since ops v7: a scenario describes a load shape, and the same shape is
+     * run against different clusters. Required — a run with no cluster has nothing to write to, and
+     * defaulting it would silently load the wrong grid.
+     */
+    val targetCluster: String,
+    /**
      * Optional override for `ops.otel.endpoint`. When present, wins over the ops.yaml
      * value. When `ops.otel.exporter == NONE`, the override implicitly upgrades the
      * exporter to OTLP (the override only makes sense if exporting is wanted). Plugin-
@@ -29,7 +36,7 @@ data class CliArgs(
 )
 
 private val REQUIRED_FLAGS = listOf(
-    "--data", "--ops", "--scenario", "--cluster-endpoints", "--output", "--run-group",
+    "--data", "--ops", "--scenario", "--cluster-endpoints", "--output", "--run-group", "--target-cluster",
 )
 
 fun parseArgs(args: Array<String>): CliArgs {
@@ -55,6 +62,7 @@ fun parseArgs(args: Array<String>): CliArgs {
         clusterEndpoints = Paths.get(required(map, "--cluster-endpoints")),
         outputDir = Paths.get(required(map, "--output")),
         runGroup = required(map, "--run-group"),
+        targetCluster = required(map, "--target-cluster"),
         otelEndpointOverride = map["--otel-endpoint-override"]?.takeIf { it.isNotBlank() },
     )
 }

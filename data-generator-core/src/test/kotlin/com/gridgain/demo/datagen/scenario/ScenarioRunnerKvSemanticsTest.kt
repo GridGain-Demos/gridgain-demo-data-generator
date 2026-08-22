@@ -37,7 +37,7 @@ class ScenarioRunnerKvSemanticsTest {
     fun `read_ratio of zero produces only writes`(@TempDir dir: Path) {
         val target = InMemoryTarget()
         val scenario = ScenarioSpec(
-            name = "writes-only", target = "t", rootSchemas = listOf("customer"),
+            name = "writes-only", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(1000.0), duration = CountDurationSpec(50),
             transactionScope = TransactionScope.NONE, readRatio = 0.0,
         )
@@ -50,7 +50,7 @@ class ScenarioRunnerKvSemanticsTest {
     fun `read_ratio of half produces a mix once registry warms up`(@TempDir dir: Path) {
         val target = InMemoryTarget()
         val scenario = ScenarioSpec(
-            name = "mix", target = "t", rootSchemas = listOf("customer"),
+            name = "mix", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(2000.0), duration = CountDurationSpec(200),
             transactionScope = TransactionScope.NONE, readRatio = 0.5,
         )
@@ -64,7 +64,7 @@ class ScenarioRunnerKvSemanticsTest {
     fun `update_ratio reuses previously registered keys`(@TempDir dir: Path) {
         val target = InMemoryTarget()
         val scenario = ScenarioSpec(
-            name = "update-heavy", target = "t", rootSchemas = listOf("customer"),
+            name = "update-heavy", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(2000.0), duration = CountDurationSpec(100),
             transactionScope = TransactionScope.NONE, readRatio = 0.0,
         )

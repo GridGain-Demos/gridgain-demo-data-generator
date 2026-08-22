@@ -21,7 +21,6 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
  */
 data class ScenarioSpec(
     val name: String,
-    val target: String = "",   // back-compat default; ScenarioTargetValidator (Plan 6 Task 5) enforces non-empty
     @JsonProperty("root_schemas") val rootSchemas: List<String>,
     val rate: RateSpec,
     val duration: DurationSpec,

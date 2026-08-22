@@ -11,7 +11,6 @@ class OtelSpecDeserializationTest {
     private val baseScenario = """
         scenarios:
           - name: s1
-            target: t1
             root_schemas: [customer]
             rate: { kind: constant, ops_per_second: 1.0 }
             duration: { kind: count, value: 1 }

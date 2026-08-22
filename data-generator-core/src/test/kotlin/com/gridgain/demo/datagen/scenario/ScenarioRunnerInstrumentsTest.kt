@@ -58,7 +58,6 @@ class ScenarioRunnerInstrumentsTest {
 
     private fun scenario(count: Int, readRatio: Double, opsPerSecond: Double = 1000.0) = ScenarioSpec(
         name = "instrument-test",
-        target = "t",
         rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(opsPerSecond),
         duration = CountDurationSpec(count.toLong()),

@@ -21,7 +21,6 @@ class ConfigurationParser(
             MultiFkToSameParentValidator(),
             CohortBucketSharesValidator(),
             ScenarioRootSchemaValidator(),
-            ScenarioTargetValidator(),
             KeyColumnValidator(),
             AffinityColumnValidator(),
             DistributionValidator(),

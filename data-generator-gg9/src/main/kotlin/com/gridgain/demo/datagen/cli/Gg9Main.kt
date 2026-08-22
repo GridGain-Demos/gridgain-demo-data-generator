@@ -17,13 +17,10 @@ fun main(args: Array<String>) {
     val logger = ScenarioRunnerCli.defaultLogger()
     try {
         val resolution = ScenarioRunnerCli.resolve(parsed, logger)
-        val spec = resolution.targetSpec as? Gg9KvTargetSpec
-            ?: throw MisconfigurationException(
-                "Gg9Main was launched but the resolved target '${resolution.targetSpec.name}' is " +
-                "not a gg9-kv target (kind=${resolution.targetSpec::class.simpleName}). " +
-                "The plugin's DataGenerateTask is supposed to dispatch the right flavor — " +
-                "if running directly, invoke Gg8Main instead."
-            )
+        // The only variant this entry point can serve. Before ops v7 this was a cast of a
+        // deserialized target plus an error for the wrong kind; the kind was never information the
+        // entry point lacked.
+        val spec = Gg9KvTargetSpec(resolution.targetClusterName)
 
         val mode = resolution.scenario.provisioning
         if (mode != ProvisioningMode.SKIP) {

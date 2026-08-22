@@ -8,7 +8,7 @@ class ProvisioningPlanFactoryTest {
     private fun col(name: String, vs: ValueSourceSpec, key: Boolean = false, affinity: Boolean = false) =
         ColumnSpec(name = name, nullRate = 0.0, affinity = affinity, key = key, valueSource = vs)
     private fun scenario(scope: TransactionScope = TransactionScope.NONE) =
-        ScenarioSpec(name = "s1", target = "t1", rootSchemas = listOf("customer"),
+        ScenarioSpec(name = "s1", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(1.0), duration = CountDurationSpec(1L),
             transactionScope = scope, readRatio = 0.0)
 

@@ -56,7 +56,7 @@ class ScenarioRunnerTxOpEmissionTest {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
         val scenario = ScenarioSpec(
-            name = "tx-test", target = "t",
+            name = "tx-test",
             rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(1000.0),
             duration = CountDurationSpec(count),

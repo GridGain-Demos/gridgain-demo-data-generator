@@ -21,7 +21,6 @@ class DefaultCoordinatorFactoryTest {
 
     private fun scenario(distribution: DistributionSpec? = null) = ScenarioSpec(
         name = "load",
-        target = "gg8-trip",
         rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0),
         duration = CountDurationSpec(200),

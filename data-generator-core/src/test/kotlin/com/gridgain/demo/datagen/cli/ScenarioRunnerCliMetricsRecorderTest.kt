@@ -95,6 +95,7 @@ class ScenarioRunnerCliMetricsRecorderTest {
             clusterEndpoints = endpoints,
             outputDir = outputDir,
             runGroup = "test-group",
+            targetCluster = "test-cluster",
         )
     }
 }

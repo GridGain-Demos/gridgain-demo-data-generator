@@ -44,7 +44,11 @@ object ScenarioRunnerCli {
     data class Resolution(
         val parsedConfig: ParsedConfiguration,
         val scenario: ScenarioSpec,
-        val targetSpec: TargetSpec,
+        /**
+         * The cluster named by `--target-cluster`. Deliberately a name, not a [TargetSpec]: core
+         * cannot know which flavour to build, and each `Main` builds the only one it can serve.
+         */
+        val targetClusterName: String,
         val keyColumnByName: Map<String, String>,
         val openTelemetry: OpenTelemetry,
         val instruments: Instruments,
@@ -82,12 +86,6 @@ object ScenarioRunnerCli {
                 "Available: ${parsedConfig.ops.scenarios.joinToString(", ") { it.name }}."
             )
 
-        val targetSpec = parsedConfig.ops.targets.firstOrNull { it.name == scenario.target }
-            ?: throw MisconfigurationException(
-                "Target '${scenario.target}' referenced by scenario '${scenario.name}' " +
-                "is not declared in ops.yaml's targets[]."
-            )
-
         val keyColumnByName = parsedConfig.data.schemas.associate { schema ->
             schema.name to schema.columns.first { it.key }.name
         }
@@ -100,7 +98,7 @@ object ScenarioRunnerCli {
         return Resolution(
             parsedConfig = parsedConfig,
             scenario = scenario,
-            targetSpec = targetSpec,
+            targetClusterName = parsed.targetCluster,
             keyColumnByName = keyColumnByName,
             openTelemetry = openTelemetry,
             instruments = instruments,
@@ -299,14 +297,14 @@ object ScenarioRunnerCli {
                 target = target,
                 keyRegistry = keyRegistry,
                 instruments = resolution.instruments,
-                targetName = resolution.targetSpec.name,
+                targetName = resolution.targetClusterName,
                 metrics = metricsRecorder,
                 rateLimiter = rateLimiter,
             )
 
             runLog.emit(LifecycleEvent.ScenarioStarted(
                 scenarioName = resolution.scenario.name,
-                targetName = resolution.targetSpec.name,
+                targetName = resolution.targetClusterName,
             ))
 
             val startedAt = Instant.now()

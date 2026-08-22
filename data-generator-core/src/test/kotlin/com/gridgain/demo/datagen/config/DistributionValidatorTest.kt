@@ -10,10 +10,8 @@ class DistributionValidatorTest {
         listOf(SchemaSpec("customer", 0.0,
             listOf(ColumnSpec("id", 0.0, key = true, valueSource = SequenceSpec(1, 1))))),
     )
-    private fun gg8(name: String) = Gg8KvTargetSpec(name = name, clusterName = "trip")
-
     private fun scenario(name: String, distribution: DistributionSpec?) = ScenarioSpec(
-        name = name, target = "gg8-trip", rootSchemas = listOf("customer"),
+        name = name, rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0), duration = TimeDurationSpec("PT1S"),
         readRatio = 0.0,
         distribution = distribution,
@@ -21,7 +19,6 @@ class DistributionValidatorTest {
 
     private fun ops(distribution: DistributionSpec?) = OpsConfig(
         schemaVersion = CURRENT_OPS_SCHEMA_VERSION,
-        targets = listOf(gg8("gg8-trip")),
         scenarios = listOf(scenario("s", distribution)),
     )
 

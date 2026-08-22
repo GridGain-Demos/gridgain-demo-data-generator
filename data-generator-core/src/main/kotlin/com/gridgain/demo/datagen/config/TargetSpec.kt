@@ -1,24 +1,20 @@
 package com.gridgain.demo.datagen.config
 
-import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.annotation.JsonSubTypes
-import com.fasterxml.jackson.annotation.JsonTypeInfo
-
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "kind")
-@JsonSubTypes(
-    JsonSubTypes.Type(value = Gg8KvTargetSpec::class, name = "gg8-kv"),
-    JsonSubTypes.Type(value = Gg9KvTargetSpec::class, name = "gg9-kv"),
-)
+/**
+ * The cluster a run writes to, in the flavour of the entry point that built it.
+ *
+ * No longer deserialized from ops.yaml: v7 removed `targets:`, and the cluster now arrives on the
+ * CLI as `--target-cluster`. Each `Main` constructs the one variant it can serve — `Gg8Main` a
+ * [Gg8KvTargetSpec], `Gg9Main` a [Gg9KvTargetSpec] — which is why the old `kind` discriminator
+ * carried no information the entry point did not already have.
+ *
+ * The sealed hierarchy is retained deliberately: it is how a flavour-specific target is passed
+ * without a cast, and further kinds are expected.
+ */
 sealed class TargetSpec {
-    abstract val name: String
+    abstract val clusterName: String
 }
 
-data class Gg8KvTargetSpec(
-    override val name: String,
-    @JsonProperty("cluster_name") val clusterName: String,
-) : TargetSpec()
+data class Gg8KvTargetSpec(override val clusterName: String) : TargetSpec()
 
-data class Gg9KvTargetSpec(
-    override val name: String,
-    @JsonProperty("cluster_name") val clusterName: String,
-) : TargetSpec()
+data class Gg9KvTargetSpec(override val clusterName: String) : TargetSpec()
