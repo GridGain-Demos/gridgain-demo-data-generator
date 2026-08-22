@@ -76,15 +76,21 @@ class MigrateOpsV6toV7Test {
     }
 
     @Test
-    fun `is silent and idempotent on a file that never had targets`() {
+    fun `is idempotent and silent on a file that never had targets`() {
         val logger = RecordingLogger()
         val map: MutableMap<String, Any> = mutableMapOf(
             "schema_version" to 6,
             "scenarios" to mutableListOf(mutableMapOf("name" to "s1")),
         )
-        val out = MigrateOpsV6toV7(logger).migrate(map)
+        val migration = MigrateOpsV6toV7(logger)
 
-        assertThat(out).doesNotContainKey("targets")
+        val first = migration.migrate(map)
+        assertThat(first).doesNotContainKey("targets")
+        assertThat(logger.warnings).isEmpty()
+
+        val second = migration.migrate(first)
+        assertThat(second).isEqualTo(first)
+        assertThat(second).doesNotContainKey("targets")
         assertThat(logger.warnings).isEmpty()
     }
 
@@ -99,5 +105,65 @@ class MigrateOpsV6toV7Test {
         MigrateOpsV6toV7(logger).migrate(map)
 
         assertThat(logger.warnings.single()).contains("s1").contains("ghost")
+    }
+
+    @Test
+    fun `warns when the top-level targets block is not a list`() {
+        val logger = RecordingLogger()
+        val map: MutableMap<String, Any> = mutableMapOf(
+            "schema_version" to 6,
+            "targets" to mutableMapOf("name" to "t1", "cluster_name" to "c1"),
+            "scenarios" to mutableListOf(mutableMapOf("name" to "s1", "target" to "t1")),
+        )
+        val out = MigrateOpsV6toV7(logger).migrate(map)
+
+        assertThat(out).doesNotContainKey("targets")
+        // one warning for the malformed block, one for the scenario that could not resolve
+        // its target now that the block was discarded
+        assertThat(logger.warnings).hasSize(2)
+        assertThat(logger.warnings[0])
+            .contains("targets")
+            .contains("not a list")
+            .contains("mapping")
+    }
+
+    @Test
+    fun `warns naming the scenario and value when scenario target is not a string`() {
+        val logger = RecordingLogger()
+        val map: MutableMap<String, Any> = mutableMapOf(
+            "schema_version" to 6,
+            "scenarios" to mutableListOf(mutableMapOf("name" to "s1", "target" to 42)),
+        )
+        val out = MigrateOpsV6toV7(logger).migrate(map)
+
+        @Suppress("UNCHECKED_CAST")
+        val scenarios = out["scenarios"] as List<Map<String, Any>>
+        assertThat(scenarios.single()).doesNotContainKey("target")
+
+        assertThat(logger.warnings).hasSize(1)
+        assertThat(logger.warnings.single())
+            .contains("s1")
+            .contains("42")
+            .contains("not a string")
+    }
+
+    @Test
+    fun `two scenarios sharing one target name each get their own warning`() {
+        val logger = RecordingLogger()
+        val map: MutableMap<String, Any> = mutableMapOf(
+            "schema_version" to 6,
+            "targets" to mutableListOf(
+                mutableMapOf("name" to "t1", "kind" to "gg8-kv", "cluster_name" to "shared-cluster")
+            ),
+            "scenarios" to mutableListOf(
+                mutableMapOf("name" to "s1", "target" to "t1"),
+                mutableMapOf("name" to "s2", "target" to "t1"),
+            ),
+        )
+        MigrateOpsV6toV7(logger).migrate(map)
+
+        assertThat(logger.warnings).hasSize(2)
+        assertThat(logger.warnings[0]).contains("s1").contains("shared-cluster")
+        assertThat(logger.warnings[1]).contains("s2").contains("shared-cluster")
     }
 }
