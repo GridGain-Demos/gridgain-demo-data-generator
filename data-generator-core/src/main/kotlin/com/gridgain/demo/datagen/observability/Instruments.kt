@@ -34,6 +34,13 @@ class Instruments(otel: OpenTelemetry) {
         const val OBSERVED_RATE = "data_generator.observed_rate"
 
         const val ATTR_SCENARIO = "scenario"
+        /**
+         * The target cluster. Since ops v7 this carries the **cluster name** (from
+         * `--target-cluster` / [com.gridgain.demo.datagen.cli.ScenarioRunnerCli.Resolution.targetClusterName])
+         * — before v7 it carried the alias of a `targets[]` entry. The attribute name is unchanged
+         * so existing queries keep resolving; a dashboard that groups by it will re-label rather
+         * than empty.
+         */
         const val ATTR_TARGET = "target"
         const val ATTR_SCHEMA = "schema"
         const val ATTR_OP = "op"            // put | get | tx_commit | tx_rollback
