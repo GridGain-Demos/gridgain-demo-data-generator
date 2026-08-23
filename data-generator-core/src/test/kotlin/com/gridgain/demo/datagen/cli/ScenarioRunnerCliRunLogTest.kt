@@ -35,6 +35,14 @@ class ScenarioRunnerCliRunLogTest {
         assertThat(events).containsSubsequence(
             "scenario.started", "scenario.stopped", "state.persisted",
         )
+
+        // Pins that Resolution.targetClusterName actually reaches the run log via
+        // ScenarioRunner(targetName = ...) / LifecycleEvent.ScenarioStarted(targetName = ...),
+        // not just that the fixture field exists.
+        val started = docs.first { it["event"] == "scenario.started" }
+        @Suppress("UNCHECKED_CAST")
+        val attributes = started["attributes"] as Map<String, Any>
+        assertThat(attributes["target"]).isEqualTo("test-cluster")
     }
 
     private fun buildCliArgs(dir: Path, outputDir: Path, scenarioName: String): CliArgs {

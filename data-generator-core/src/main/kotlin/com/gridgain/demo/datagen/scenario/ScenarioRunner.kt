@@ -121,6 +121,12 @@ class ScenarioRunner(
         val rootSchemaName = scenario.rootSchemas.first()  // multi-root weighting deferred
         val rootKeyColumn = keyColumnByName[rootSchemaName]!!
         val isRead = scenario.readRatio > 0.0 &&
+            // supportsReads is target.kt's only remaining reader (supportsTransactions has none).
+            // The read_ratio/supportsReads coherence check used to live in ScenarioTargetValidator
+            // and was removed along with ops v7's targets:. A target kind that cannot read,
+            // combined with a nonzero read_ratio, would silently fall through this conjunct to
+            // 100% writes — target kind #3 that cannot read must reinstate an explicit
+            // misconfiguration error rather than let this line absorb the mismatch.
             target.supportsReads &&
             decisionRandom.nextDouble() < scenario.readRatio &&
             keyRegistry.size(rootSchemaName) > 0

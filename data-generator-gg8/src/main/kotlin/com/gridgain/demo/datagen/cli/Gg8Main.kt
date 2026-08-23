@@ -1,6 +1,7 @@
 @file:JvmName("Gg8Main")
 package com.gridgain.demo.datagen.cli
 
+import com.gridgain.demo.client.gg8.DemoAddressFinder
 import com.gridgain.demo.datagen.config.Gg8KvTargetSpec
 import com.gridgain.demo.datagen.config.ProvisioningMode
 import com.gridgain.demo.datagen.errors.MisconfigurationException
@@ -17,10 +18,10 @@ fun main(args: Array<String>) {
     val logger = ScenarioRunnerCli.defaultLogger()
     try {
         val resolution = ScenarioRunnerCli.resolve(parsed, logger)
-        // The only variant this entry point can serve. Before ops v7 this was a cast of a
-        // deserialized target plus an error for the wrong kind; the kind was never information the
-        // entry point lacked.
+        // The only variant this entry point can serve — see TargetSpec's KDoc for why the sealed
+        // hierarchy is kept even though nothing here takes a TargetSpec parameter.
         val spec = Gg8KvTargetSpec(resolution.targetClusterName)
+        resolveTargetClusterOrThrow(spec)
 
         val mode = resolution.scenario.provisioning
         if (mode != ProvisioningMode.SKIP) {
@@ -57,5 +58,22 @@ fun main(args: Array<String>) {
     } catch (e: Exception) {
         logger.error("data generator (gg8) failed: ${e.message}", e)
         exitProcess(1)
+    }
+}
+
+/**
+ * Resolves the cluster before generating anything. Without this, an unknown or wrong-major
+ * cluster surfaces per-operation inside the target's write path, where the error is counted
+ * and discarded — the run reports 0 successes and every op failed, and still exits 0. This is
+ * the guard the pre-v7 cast-and-reject used to provide.
+ */
+internal fun resolveTargetClusterOrThrow(spec: Gg8KvTargetSpec) {
+    try {
+        DemoAddressFinder(spec.clusterName).addresses
+    } catch (e: RuntimeException) {
+        throw MisconfigurationException(
+            "--target-cluster could not be resolved for a GridGain 8 run: ${e.message}",
+            cause = e,
+        )
     }
 }

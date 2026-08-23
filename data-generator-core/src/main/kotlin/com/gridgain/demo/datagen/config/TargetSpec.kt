@@ -8,8 +8,11 @@ package com.gridgain.demo.datagen.config
  * [Gg8KvTargetSpec], `Gg9Main` a [Gg9KvTargetSpec] — which is why the old `kind` discriminator
  * carried no information the entry point did not already have.
  *
- * The sealed hierarchy is retained deliberately: it is how a flavour-specific target is passed
- * without a cast, and further kinds are expected.
+ * The sealed hierarchy is retained deliberately, per the workspace rule against collapsing
+ * hierarchies: further target kinds are expected, and each will need flavour-specific fields
+ * beyond the cluster name. Today no consumer takes a `TargetSpec` parameter — each `Main` builds
+ * its variant and reads `clusterName` — so the hierarchy carries future shape, not present
+ * behaviour.
  */
 sealed class TargetSpec {
     abstract val clusterName: String
