@@ -37,6 +37,34 @@ class ConfigurationParserTest {
     }
 
     @Test
+    fun `a v6 ops file with targets migrates, validates and parses as v7`(@TempDir dir: Path) {
+        val data = copyResource(dir, "data-v2-customer.yaml", "data.yaml")
+        val ops = dir.resolve("ops.yaml")
+        ops.writeText(
+            """
+            schema_version: 6
+            targets:
+              - name: t1
+                kind: gg8-kv
+                cluster_name: prod-gg8
+            scenarios:
+              - name: load
+                target: t1
+                root_schemas: [customer]
+                rate: { kind: constant, ops_per_second: 10 }
+                duration: { kind: count, value: 5 }
+                read_ratio: 0.0
+            """.trimIndent()
+        )
+
+        val parser = ConfigurationParser(logger = logger)
+        val parsed = parser.parse(dataFile = data.toFile(), opsFile = ops.toFile())
+
+        assertThat(parsed.ops.schemaVersion).isEqualTo(7)
+        assertThat(parsed.ops.scenarios.single().name).isEqualTo("load")
+    }
+
+    @Test
     fun `failure in JSONSchema stage surfaces as MisconfigurationException naming the file`(@TempDir dir: Path) {
         val data = dir.resolve("data.yaml").also { it.writeText("schema_version: 1\n") }
         val ops = dir.resolve("ops.yaml").also { it.writeText("schema_version: 99\n") }
