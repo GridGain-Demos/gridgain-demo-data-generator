@@ -129,15 +129,26 @@ primitives:
   first, Kafka later.
 
 **Capabilities all targets must declare:**
-- `supports_reads: bool`. KV targets do; file targets don't. A scenario with
-  `read_ratio > 0` against a non-reading target is a validation error.
+- `supports_reads: bool`. KV targets do; file targets don't.
 - `supports_transactions: bool`. Drives whether `transaction_scope:
   business_event` is honored or rejected.
 
-**Connection config** lives under `ops.yaml` `targets:`. Endpoint addresses
-reuse the yaml shape already supported by `ClientEndpointsLoader`. Auth and SSL
-are declared per target. Secrets follow the project rule that config files may
-contain secrets and must be gitignored.
+⚠️ **Neither capability is currently enforced by validation.** `ScenarioTargetValidator`
+checked both, but its checks were dead branches — both KV targets return `true` for both
+capabilities — and it was deleted with `ops.yaml`'s `targets:` block at ops schema v7.
+Today `supports_transactions` has no reader at all, and `supports_reads` has exactly one:
+a conjunct in `ScenarioRunner` gating whether an op is a read. So the first target kind
+that returns `false` for either **must reinstate an explicit validation error**, because
+that conjunct will otherwise absorb the mismatch silently — a scenario with
+`read_ratio: 0.5` against a non-reading target would just run 100% writes, which is the
+kind of silent fallback the project rules forbid.
+
+**Connection config.** The target cluster is named at launch by the generator CLI's
+required `--target-cluster <name>` flag (ops v7 removed the `targets:` block that used to
+declare it), and resolved against the client-endpoints file via
+`gridgain-demo-client-utils`. Endpoint addresses reuse the yaml shape
+`ClientEndpointsLoader` already supports. Secrets follow the project rule that config
+files may contain secrets and must be gitignored.
 
 ---
 
@@ -196,8 +207,8 @@ anti-affinity).
 
 - `data.yaml` — schemas, columns, providers, relations, custom yaml-provider
   data, cohort buckets, per-schema `update_ratio`.
-- `ops.yaml` — scenarios, targets, provisioning toggles, runtime config,
-  observability.
+- `ops.yaml` — scenarios, provisioning toggles, runtime config, observability.
+  No target/cluster binding since ops v7; see §Connection config.
 
 **Schema versioning.** Each file carries a top-level `schema_version: <int>`.
 Two independent monotonic versions: `CURRENT_DATA_SCHEMA_VERSION` and
@@ -216,11 +227,9 @@ assemble`.
 
 Cross-element validation enforces:
 - Relation referential integrity.
-- Scenario-to-target capability compatibility:
-    - `read_ratio > 0` requires `target.supports_reads = true`.
-    - `transaction_scope: business_event` requires
-      `target.supports_transactions = true`.
 - `null_rate` not on relation columns.
+- *(Scenario-to-target capability compatibility used to be enforced here and no longer
+  is — see the warning under §Capabilities for what a third target kind must reinstate.)*
 - Affinity-vs-transaction warning from §2.
 
 **Generated-output root.** All file output lives under

@@ -5,7 +5,7 @@ description: How to USE the GridGain demo data generator — authoring ops.yaml/
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-08-18*
+*Last updated: 2026-08-23*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -15,7 +15,7 @@ A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **
 
 | File | Purpose | Current schema_version |
 |------|---------|------------------------|
-| `ops.yaml` | targets, scenarios (rate/duration/scope), metrics, control, otel | **6** |
+| `ops.yaml` | scenarios (rate/duration/scope), metrics, control, otel | **7** |
 | `data.yaml` | schemas → columns → value sources, FK relations | **2** |
 
 Both carry a `schema_version` and are **auto-migrated** forward before validation (`OpsConfigMigrationRunner`, `DataConfigMigrationRunner`). Validation failures are fatal with remediation text.
@@ -23,11 +23,7 @@ Both carry a `schema_version` and are **auto-migrated** forward before validatio
 ## ops.yaml
 
 ```yaml
-schema_version: 6
-targets:
-  - name: my-cluster          # referenced by scenario.target
-    kind: gg8-kv              # gg8-kv | gg9-kv
-    cluster_name: gg8-prod    # a cluster in the client-endpoints file
+schema_version: 7
 metrics:                       # optional — live throughput/latency to Kafka (§Metrics)
   kafka_bootstrap: "kafka:9092"
   topic: "datagen-metrics"
@@ -42,7 +38,6 @@ otel:                          # optional — OpenTelemetry export (exporter: no
   endpoint: http://collector:4317
 scenarios:
   - name: load
-    target: my-cluster
     root_schemas: [customer]   # emitted with their transitive children (parent-fk-ref)
     rate: { kind: constant, ops_per_second: 1000 }
     duration: { kind: time, value: "PT10M" }   # ISO-8601 Duration (see gotcha)
@@ -53,6 +48,8 @@ scenarios:
       replicas: 4
       partition_count: 16
 ```
+
+**A scenario names no cluster.** It describes a *load shape* only, which is what makes one ops file portable across demos. The cluster comes from `--target-cluster <name>` at launch (§CLI), resolved against the client-endpoints file. Before v7 a top-level `targets:` array declared `{name, kind, cluster_name}` and each scenario carried a `target:` naming one; `MigrateOpsV6toV7` strips both (§Gotchas). The `kind` discriminator went with them — it was never information the entry point lacked, since `Gg8Main`/`Gg9Main` each serve exactly one flavour.
 
 **`rate` kinds:** `constant` (`ops_per_second`) · `ramped` (`from`, `to`, `over: <ISO-8601>`) · `stepped` (`steps: [{rate, hold: <ISO-8601>}]`, holds final rate after the last step).
 
@@ -105,10 +102,12 @@ schemas:
 5. **Durations are ISO-8601** (`java.time.Duration`): `PT10M`, not `10m` (`DateTimeParseException`).
 6. **Single-thread per pod.** One pod is bounded by GG round-trip latency, so raising `ops_per_second` alone plateaus — add pods (`replicas`) to push more total throughput.
 7. **ops `schema_version: 6` needs a generator built at or after 2026-08-18.** v6 makes `histogram_highest_ms` and `histogram_significant_digits` required inside `metrics:`. An older archive refuses the file outright ("only supports up to schema_version 5"), and a newer generator refuses a v6 `metrics:` block that omits either key. `MigrateOpsV5toV6` fills both in automatically — but it rewrites the file through SnakeYAML and **drops every comment**, so a hand-commented `ops.yaml` should be hand-edited instead. `histogram_significant_digits` is capped at 4: cost is ~100x per extra digit, and 5 would mean ~21 MB/sec of allocation per instance.
+8. **ops `schema_version: 7` invalidates every deployed generator archive.** v7 removes `targets:` and `scenario.target`; the cluster arrives as the required `--target-cluster` flag instead. The two directions both fail: a pre-v7 archive refuses a v7 file outright ("only supports up to schema_version 6"), and a v7 archive refuses to start without the flag. So upgrading an ops file is not a config-only change — **every** installed archive and image has to be rebuilt and redeployed alongside it, and any launcher that does not pass `--target-cluster` yet (a systemd unit, a k8s manifest, a script) has to be updated in the same pass. `MigrateOpsV6toV7` migrates the file automatically but rewrites it through SnakeYAML and **drops every comment**, so hand-edit a commented `ops.yaml` instead. It also **cannot** preserve the scenario→cluster wiring — nothing in v7 stores it — so it logs a WARN per scenario naming the cluster it discarded and the flag that now supplies it. Read those warnings before discarding the log; they are the only record of what your launch arguments should be.
+9. **The `target` telemetry attribute now carries a cluster name, not a target alias.** The attribute *name* is unchanged (`target`), so existing queries keep resolving — but a dashboard that groups by it re-labels, showing cluster names where `targets[]` aliases used to appear. Panels keep working; saved queries filtering on a literal alias silently match nothing. This is the same class as the "metrics arrive, Prometheus is healthy, every panel is empty" failure: nothing errors, so only the graph tells you.
 
 ## Metrics
 
-- **OTel instruments** (always recorded): in-flight, op duration histogram, errors, target rate, observed/achieved rate — tagged by scenario/target/schema/operation. Exported per the `otel:` block.
+- **OTel instruments** (always recorded): in-flight, op duration histogram, errors, target rate, observed/achieved rate — tagged by scenario/target/schema/operation, where `target` is the **cluster name** from `--target-cluster` (see gotcha 9). Exported per the `otel:` block.
 - **Live Kafka sink** (only when `metrics:` present): a JSON snapshot every `interval_ms` to the named topic. Fields (camelCase on the wire, see `metrics/MetricsSnapshot.kt`): `observedTps`, `avgLatencyMs`, `totalOps`, `errorCount`, `runAvgTps`, `runAvgLatencyMs`, `runLatencyHistogram`, `targetTps`, `runGroup`, `runId`, `active`. Consumers (e.g. a UI) subscribe for a live rate/latency feed without scraping Prometheus.
   - **`observedTps`/`avgLatencyMs` are interval figures; `runAvgTps`/`runAvgLatencyMs` are whole-run.** The first pair makes a live graph track current load; the second pair is what an end-of-run summary reports.
   - **`avgLatencyMs` is an interval *mean*, not a percentile.** No scalar percentiles are on this feed. What *is* on it is `runLatencyHistogram` — the instance's whole-run HdrHistogram, compressed encoding, base64, **microseconds** — which a consumer reads any percentile off. Sized by `histogram_highest_ms`/`histogram_significant_digits`; an operation slower than the ceiling is clamped to it, not dropped, so a p99 pinned at the ceiling reads as "slower than we can measure".
@@ -135,7 +134,9 @@ Only when `control:` is present (v5+). The generator consumes `ControlCommand` J
 
 ## CLI
 
-Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-gg9`; dispatcher `ScenarioRunnerCli`). It takes the scenario name + paths to `ops.yaml`, `data.yaml`, the client-endpoints file, an output dir, and **`--run-group <id>` (required)** — the id shared by every instance of one logical run (see §Metrics). All are required; a missing flag fails with a message naming it and the full expected invocation. **Verify the exact flag names against `ScenarioRunnerCli` / the `*Main` classes before scripting** — the config files above are the stable contract; launch flags are an implementation detail.
+Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-gg9`; dispatcher `ScenarioRunnerCli`). It takes the scenario name + paths to `ops.yaml`, `data.yaml`, the client-endpoints file, an output dir, **`--run-group <id>`** — the id shared by every instance of one logical run (see §Metrics) — and **`--target-cluster <name>` (required from ops v7)**, the cluster to write to, resolved against the client-endpoints file. All are required; a missing flag fails with a message naming it and the full expected invocation. **Verify the exact flag names against `ScenarioRunnerCli` / the `*Main` classes before scripting** — the config files above are the stable contract; launch flags are an implementation detail.
+
+**Why the cluster is a flag and not a config field.** The same load shape is routinely run against different clusters, and a scenario that named one made the whole ops file specific to a single demo. As a flag it is also checked before any load is generated: each `*Main` resolves the cluster up front and fails with a `MisconfigurationException` naming `--target-cluster` if the name is unknown or belongs to the other GridGain major version. That eager check matters — the resolution failure surfaces from inside the write path, where it is counted as an op error and discarded, so without it an unresolvable cluster produces a full-length run reporting zero successes and **exit code 0**.
 
 ## Sources of truth (verify here when exact)
 
@@ -149,7 +150,8 @@ are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
 - transaction/atomicity rule: `target/Gg8KvTarget.kt` (gg8 module)
 - distribution/coordinator: `coordination/` package + the distribution validator
 - metrics: `metrics/` — `MetricsSnapshot`, `LiveMetricsReporter`, `KafkaMetricsSink`, `LatencyHistogramBounds`, `HistogramCodec`. OTel instruments (a separate, always-on export) are under `observability/`.
-- CLI: `cli/` package (`ScenarioRunnerCli` dispatcher + the `*Main` entry points)
+- CLI: `cli/` package (`CliArgs` for the flag set, `ScenarioRunnerCli` dispatcher + the `*Main` entry points, which is where the target cluster is resolved)
+- target cluster: `config/TargetSpec.kt` — a sealed hierarchy still, but **no longer deserialized** from ops.yaml since v7; each `*Main` constructs the one variant it serves from `--target-cluster`
 
 ## Maintenance
 
