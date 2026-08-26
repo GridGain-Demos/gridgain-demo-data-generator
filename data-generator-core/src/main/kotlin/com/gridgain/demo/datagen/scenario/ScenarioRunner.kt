@@ -42,6 +42,13 @@ class ScenarioRunner(
      */
     val rateLimiter: ControllableRateLimiter =
         ControllableRateLimiter(buildRateLimiter(scenario)),
+    /**
+     * The run's shared stop signal — see [StopSignal]. Injectable because the sources that raise it
+     * (the JVM shutdown hook, the control channel's `stop` command) are wired by the caller and
+     * exist before the runner does. Defaults to a signal nothing raises, so a runner built without
+     * one simply runs its configured duration.
+     */
+    private val stopSignal: StopSignal = StopSignal(),
 ) {
 
     private var totalAttempts: Long = 0L
@@ -58,6 +65,13 @@ class ScenarioRunner(
             ))
     }
 
+    init {
+        // A generator paused at rate 0.0 is parked inside the limiter, not in the loop, so it would
+        // never reach the stop check below. Pushing the release to it is what lets a paused fleet be
+        // stopped at all.
+        stopSignal.onRaise(rateLimiter::release)
+    }
+
     fun run(): ScenarioResult {
         val evaluator = StopConditionEvaluator(scenario.stopConditions)
         instruments.targetRateRef.set(rateLimiter.currentTargetTps())
@@ -68,36 +82,40 @@ class ScenarioRunner(
         var error = 0L
         var stopReason = ""
 
+        // The three duration kinds differ only in when they are exhausted, so they share one loop.
+        // They used to have one loop each, which was fine while the only early exit was the stop
+        // condition — the stop *signal* has to end a run of **every** kind (a SIGTERM during a
+        // `time` or `count` run must stop it cleanly too), and per-kind loops would mean three
+        // copies of that check drifting apart.
+        val notExhausted: () -> Boolean
+        val exhaustedReason: String
         when (val d = scenario.duration) {
             is CountDurationSpec -> {
-                while (success + error < d.value) {
-                    val s = tick(rateLimiter, evaluator)
-                    if (s) success++ else error++
-                    val triggered = evaluator.shouldStop()
-                    if (triggered != null) { stopReason = triggered; break }
-                }
-                if (stopReason.isEmpty()) stopReason = "count reached"
+                notExhausted = { success + error < d.value }
+                exhaustedReason = "count reached"
             }
             is TimeDurationSpec -> {
                 val td = Duration.parse(d.value)
-                while (Duration.between(started, Instant.now()) < td) {
-                    val s = tick(rateLimiter, evaluator)
-                    if (s) success++ else error++
-                    val triggered = evaluator.shouldStop()
-                    if (triggered != null) { stopReason = triggered; break }
-                }
-                if (stopReason.isEmpty()) stopReason = "time elapsed"
+                notExhausted = { Duration.between(started, Instant.now()) < td }
+                exhaustedReason = "time elapsed"
             }
             is UntilStopDurationSpec -> {
-                while (Duration.between(started, Instant.now()) < untilStopCap) {
-                    val s = tick(rateLimiter, evaluator)
-                    if (s) success++ else error++
-                    val triggered = evaluator.shouldStop()
-                    if (triggered != null) { stopReason = triggered; break }
-                }
-                if (stopReason.isEmpty()) stopReason = "until_stop_condition cap reached"
+                notExhausted = { Duration.between(started, Instant.now()) < untilStopCap }
+                exhaustedReason = "until_stop_condition cap reached"
             }
         }
+
+        while (notExhausted()) {
+            // Read before the tick rather than after it, so a signal raised mid-tick lets that tick
+            // finish and costs no further operation.
+            val signalled = stopSignal.reason()
+            if (signalled != null) { stopReason = "$STOPPED_BY_SIGNAL$signalled"; break }
+            val s = tick(rateLimiter, evaluator)
+            if (s) success++ else error++
+            val triggered = evaluator.shouldStop()
+            if (triggered != null) { stopReason = triggered; break }
+        }
+        if (stopReason.isEmpty()) stopReason = exhaustedReason
 
         val wall = Duration.between(started, Instant.now())
         val achievedRate = if (wall.toNanos() > 0)
@@ -208,6 +226,14 @@ class ScenarioRunner(
     }
 
     companion object {
+        /**
+         * Prefix on the `stop_reason` of a run that a [StopSignal] ended, so a consumer reading
+         * `result.yaml` or the run log can tell "somebody stopped this" from "it finished its
+         * configured duration" (`count reached` / `time elapsed` / `until_stop_condition cap
+         * reached`) and from a triggered stop condition. The signal's own reason follows it.
+         */
+        const val STOPPED_BY_SIGNAL = "stopped by signal: "
+
         /** Builds the limiter for the scenario's configured rate schedule. Public so a caller that
          *  needs the [ControllableRateLimiter] wrapper before constructing the runner can build the
          *  same thing the default would have. */

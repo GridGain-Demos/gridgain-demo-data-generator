@@ -122,6 +122,44 @@ class ControllableRateLimiterTest {
     }
 
     @Test
+    fun `release wakes a caller parked at zero without inventing a rate`() {
+        val limiter = ControllableRateLimiter(RecordingRateLimiter(50.0))
+        limiter.setRate(0.0)
+
+        val entered = CountDownLatch(1)
+        val returned = CountDownLatch(1)
+        val worker = Thread {
+            entered.countDown()
+            limiter.acquire()
+            returned.countDown()
+        }.apply { isDaemon = true; start() }
+
+        assertTrue(entered.await(2, TimeUnit.SECONDS), "worker never started")
+        assertTrue(!returned.await(200, TimeUnit.MILLISECONDS), "acquire should park while the rate is zero")
+
+        limiter.release()
+
+        assertTrue(returned.await(2, TimeUnit.SECONDS), "release must wake the parked caller so it can stop")
+        assertEquals(0.0, limiter.currentTargetTps(), 1e-9,
+            "release ends the run; it must not report a target the operator never asked for")
+        worker.join(1_000)
+    }
+
+    @Test
+    fun `after release a zero rate no longer parks`() {
+        val limiter = ControllableRateLimiter(RecordingRateLimiter(50.0))
+        limiter.setRate(0.0)
+        limiter.release()
+
+        val returned = CountDownLatch(1)
+        Thread { repeat(3) { limiter.acquire() }; returned.countDown() }
+            .apply { isDaemon = true; start() }
+
+        assertTrue(returned.await(2, TimeUnit.SECONDS),
+            "a released limiter must never park again — the run is ending")
+    }
+
+    @Test
     fun `a zero rate reports zero as the target`() {
         val limiter = ControllableRateLimiter(RecordingRateLimiter(50.0))
 

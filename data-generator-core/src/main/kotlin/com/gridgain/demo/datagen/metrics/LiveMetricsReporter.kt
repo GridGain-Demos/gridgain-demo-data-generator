@@ -10,9 +10,11 @@ package com.gridgain.demo.datagen.metrics
  * A sink failure on any one tick is swallowed — a dropped metrics point self-heals on the next
  * interval and must never crash the generator run.
  *
- * The histogram is encoded on **every** tick, not only on the final `active=false` snapshot. There
- * is no SIGTERM handler, so a deleted pod never says goodbye — per-tick publishing means a killed
- * run still leaves a last-known-good summary behind.
+ * The histogram is encoded on **every** tick, not only on the final `active=false` snapshot. A
+ * SIGTERM does now get a bounded graceful stop (`ScenarioRunnerCli.GRACEFUL_STOP_SECONDS`), so an
+ * orderly teardown reaches [close] and says goodbye — but a SIGKILL, a grace period that overruns,
+ * or a lost node still does not, and per-tick publishing means those runs leave a last-known-good
+ * summary behind anyway.
  *
  * The cost is roughly 5-30 KB per instance per second at the recommended bounds, republished each
  * tick because the histogram is cumulative. It grows with the spread of latency buckets touched and

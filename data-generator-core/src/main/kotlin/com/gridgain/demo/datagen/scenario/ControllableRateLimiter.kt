@@ -14,6 +14,7 @@ import java.util.concurrent.locks.ReentrantLock
  *
  * A rate of `0.0` parks the run loop rather than spinning, and a later [setRate] wakes it
  * immediately via the condition — a paused generator must cost nothing and must resume promptly.
+ * [release] wakes it too, for when what arrives next is a stop rather than a rate.
  */
 class ControllableRateLimiter(
     private val delegate: RateLimiter,
@@ -26,6 +27,10 @@ class ControllableRateLimiter(
     /** NaN means "no override" — a sentinel keeps this a single volatile read, so [acquire] can
      *  never observe a torn pairing of a flag and a value. */
     @Volatile private var overrideTps: Double = NO_OVERRIDE
+
+    /** Set once by [release]; never cleared, because the only reason to release is that the run is
+     *  ending and must not park again. */
+    @Volatile private var released: Boolean = false
 
     private var nextAllowedNanos: Long = nanoTime()
 
@@ -52,6 +57,26 @@ class ControllableRateLimiter(
         }
     }
 
+    /**
+     * Stop parking, permanently, without changing the reported target rate. Wakes a caller already
+     * parked at rate `0.0` and makes every later [acquire] return straight away.
+     *
+     * Exists for one caller: a [StopSignal] wake-up. A paused generator sits inside [acquire]
+     * waiting for a rate that will never come, so the run loop never reaches its own stop check and
+     * a stop request on a paused fleet would hang until the JVM was killed. The rate is left alone
+     * on purpose — the run is ending, and inventing a rate here would report a target the operator
+     * never asked for on the way out.
+     */
+    fun release() {
+        lock.lock()
+        try {
+            released = true
+            rateRaised.signalAll()
+        } finally {
+            lock.unlock()
+        }
+    }
+
     /** Drop the override and hand pacing back to the configured schedule. */
     fun clearOverride() {
         lock.lock()
@@ -70,7 +95,7 @@ class ControllableRateLimiter(
             return
         }
         if (rate <= 0.0) {
-            awaitRateChange()
+            if (!released) awaitRateChange()
             return
         }
         val now = nanoTime()
@@ -84,12 +109,13 @@ class ControllableRateLimiter(
         return if (rate.isNaN()) delegate.currentTargetTps() else rate
     }
 
-    /** Parks until the override moves off zero (or is cleared). Returns without performing an
-     *  operation, so the run loop re-evaluates its stop conditions between pauses. */
+    /** Parks until the override moves off zero (or is cleared, or the limiter is [release]d).
+     *  Returns without performing an operation, so the run loop re-evaluates its stop conditions
+     *  between pauses. */
     private fun awaitRateChange() {
         lock.lock()
         try {
-            while (overrideTps == 0.0) {
+            while (overrideTps == 0.0 && !released) {
                 rateRaised.await()
             }
         } catch (_: InterruptedException) {

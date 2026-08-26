@@ -29,6 +29,7 @@ import com.gridgain.demo.datagen.scenario.ControllableRateLimiter
 import com.gridgain.demo.datagen.scenario.KeyRegistry
 import com.gridgain.demo.datagen.scenario.ScenarioResult
 import com.gridgain.demo.datagen.scenario.ScenarioRunner
+import com.gridgain.demo.datagen.scenario.StopSignal
 import com.gridgain.demo.datagen.state.GeneratorState
 import com.gridgain.demo.datagen.state.RunHistoryEntry
 import com.gridgain.demo.datagen.state.StatePersister
@@ -38,6 +39,8 @@ import io.opentelemetry.api.OpenTelemetry
 import net.datafaker.Faker
 import org.slf4j.LoggerFactory
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 object ScenarioRunnerCli {
 
@@ -198,6 +201,31 @@ object ScenarioRunnerCli {
         var metricsReporter: LiveMetricsReporter? = null
         var controlListener: ControlListener? = null
 
+        // One stop signal for the whole run, raised by the shutdown hook below. Registered here,
+        // where both `Gg8Main` and `Gg9Main` converge, so neither entry point can be given a
+        // graceful stop the other lacks.
+        val stopSignal = StopSignal()
+        // Counted down once the end-of-run path has finished — final `active=false` metrics
+        // snapshot, target close, result and state files — whether it succeeded or threw.
+        val runComplete = CountDownLatch(1)
+        val shutdownHook = Thread({
+            stopSignal.raise("SIGTERM (graceful shutdown requested)")
+            // The hook must not race the main thread to exit. A JVM in shutdown halts as soon as
+            // its hooks return and does **not** wait for other threads, so returning here before
+            // the run has flushed its final snapshot and closed its target would reproduce exactly
+            // the "a killed process emits nothing" behaviour this hook exists to remove.
+            if (!runComplete.await(GRACEFUL_STOP_SECONDS, TimeUnit.SECONDS)) {
+                runCatching {
+                    logger.warn(
+                        "graceful stop: the run did not finish within ${GRACEFUL_STOP_SECONDS}s of " +
+                            "SIGTERM; exiting anyway. The final metrics snapshot and result.yaml may " +
+                            "be missing — a consumer must fall back to the last live metrics tick."
+                    )
+                }
+            }
+        }, "datagen-shutdown")
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
+
         try {
             resolution.coordinator?.let { coord ->
                 coord.start()
@@ -300,6 +328,7 @@ object ScenarioRunnerCli {
                 targetName = resolution.targetClusterName,
                 metrics = metricsRecorder,
                 rateLimiter = rateLimiter,
+                stopSignal = stopSignal,
             )
 
             runLog.emit(LifecycleEvent.ScenarioStarted(
@@ -362,14 +391,43 @@ object ScenarioRunnerCli {
 
             return result
         } finally {
-            // Control first: stop accepting commands before the run's machinery goes away, so a
-            // late command can't set a rate on a limiter nothing is reading any more.
-            runCatching { controlListener?.close() }
-            // Then the reporter, so it flushes a final inactive snapshot (observedTps→0),
-            // letting a live consumer see the run end / a stepped-rate restart cleanly.
-            runCatching { metricsReporter?.close() }
-            runCatching { resolution.coordinator?.stop() }
-            OtelInitializer.close(resolution.openTelemetry)
+            try {
+                // Control first: stop accepting commands before the run's machinery goes away, so a
+                // late command can't set a rate on a limiter nothing is reading any more.
+                runCatching { controlListener?.close() }
+                // Then the reporter, so it flushes a final inactive snapshot (observedTps→0),
+                // letting a live consumer see the run end / a stepped-rate restart cleanly.
+                runCatching { metricsReporter?.close() }
+                runCatching { resolution.coordinator?.stop() }
+                OtelInitializer.close(resolution.openTelemetry)
+            } finally {
+                // Releases the shutdown hook: everything a clean stop has to emit has now been
+                // emitted, so the JVM may halt. In an inner `finally` so a failing cleanup step
+                // cannot leave the hook sitting out its whole wait on the way to a crash.
+                runComplete.countDown()
+                // Throws once a shutdown is already under way (the SIGTERM case), where there is
+                // nothing to remove — the hook is the thread running.
+                runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
+            }
         }
     }
+
+    /**
+     * How long the shutdown hook waits for the run to stop cleanly before letting the JVM halt.
+     *
+     * Sized against the two deadlines that actually kill the process, and set comfortably inside
+     * the tighter one:
+     * - a Kubernetes pod gets `terminationGracePeriodSeconds` before SIGKILL, and the generator's
+     *   Deployment does not set it — so it is the 30s default;
+     * - the host systemd unit gets `TimeoutStopSec`, rendered from the toolkit's
+     *   `host_timeouts.unit_active` (120s in the shipped template).
+     *
+     * 10s leaves 20s of margin under the tighter of the two. What has to fit inside it is small and
+     * individually bounded: one in-flight target operation, the result and state files, then the
+     * metrics reporter's final `active=false` snapshot — itself bounded by a 2s thread join, a 2s
+     * Kafka `max.block.ms` and a 2s producer close. Overrunning the pod's grace period means
+     * SIGKILL and no final snapshot at all — the behaviour this hook exists to remove — so the
+     * bound deliberately stops well short of the deadline instead of trying to spend all of it.
+     */
+    internal const val GRACEFUL_STOP_SECONDS: Long = 10L
 }

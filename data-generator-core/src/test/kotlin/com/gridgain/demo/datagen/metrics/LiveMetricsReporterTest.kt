@@ -108,8 +108,9 @@ class LiveMetricsReporterTest {
 
     @Test
     fun `every tick carries a decodable histogram so a killed run leaves a usable summary`() {
-        // There is no SIGTERM handler, so a deleted pod never says goodbye. Publishing the
-        // histogram on every tick is what makes the last-received tick a usable summary.
+        // A SIGTERM is handled gracefully now, but a SIGKILL (or a grace period that overruns)
+        // still never says goodbye. Publishing the histogram on every tick is what makes the
+        // last-received tick a usable summary for those runs.
         val recorder = MetricsRecorder(LatencyHistogramBounds(60_000L, 3))
         val sink = CapturingSink()
         var nanos = 0L
