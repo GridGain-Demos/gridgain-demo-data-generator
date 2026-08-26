@@ -200,6 +200,47 @@ class KeyColumnValidator : CrossElementValidator {
 }
 
 /**
+ * Ties the `external_signal` stop condition to the channel that delivers it.
+ *
+ * The signal arrives as a `stop` command on the runtime control channel, so a scenario declaring
+ * `external_signal` without a top-level `control:` block has nothing that can ever raise it. Paired
+ * with `duration: {kind: until_stop_condition}` — which is the pairing the condition exists for —
+ * that is an unbounded run with no way to end it short of SIGTERM, and the JSONSchema cannot express
+ * the dependency because the two live in different subtrees of the document.
+ *
+ * Also warns on the converse: `until_stop_condition` with no stop conditions at all. Nothing
+ * rejected that before and nothing rejects it now — such a run is bounded only by `ScenarioRunner`'s
+ * internal one-minute safety cap, which is a surprise rather than a trap, so it warns rather than
+ * failing the parse.
+ */
+class ExternalSignalControlValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+        for (scenario in ops.scenarios) {
+            if (scenario.stopConditions.any { it is ExternalSignalStopSpec } && ops.control == null) {
+                errors += "scenario '${scenario.name}' declares the stop condition 'external_signal', " +
+                    "but ops.yaml has no top-level 'control:' block — so nothing can ever deliver the " +
+                    "signal and the run would be unstoppable short of a SIGTERM. Add the block:\n" +
+                    "        control:\n" +
+                    "          kafka_bootstrap: \"<broker host:port reachable from the generator>\"\n" +
+                    "          topic: \"datagen-control\"\n" +
+                    "      or remove the 'external_signal' stop condition from the scenario."
+            }
+            if (scenario.duration is UntilStopDurationSpec && scenario.stopConditions.isEmpty()) {
+                warnings += "scenario '${scenario.name}' has duration kind 'until_stop_condition' but " +
+                    "no stop_conditions, so nothing decides when it ends and it will run until the " +
+                    "generator's internal safety cap stops it. Add a stop condition — " +
+                    "'external_signal' (plus a 'control:' block) for a run an operator ends, or " +
+                    "'latency_p99_above'/'error_rate_above' for one the load ends — or use duration " +
+                    "kind 'time' or 'count' instead."
+            }
+        }
+        return CrossElementValidationResult(errors = errors, warnings = warnings)
+    }
+}
+
+/**
  * Enforces `partition_count >= replicas` on each scenario's optional `distribution:` block.
  * JSONSchema can't express the cross-field constraint without `$data` refs, so it lives here.
  * `replicas >= 1` and `partition_count >= 1` are already enforced by the JSONSchema.

@@ -1,6 +1,6 @@
 ---
 name: gridgain-demo-data-generator
-description: How to USE the GridGain demo data generator — authoring ops.yaml/data.yaml, choosing rate kinds, transaction_scope, distribution (multi-pod), provisioning, live metrics, and runtime rate control. Use when configuring or running a data-generator scenario, debugging generator throughput/errors, driving load up/down at runtime, deciding how to load a GridGain cluster, or editing ops.yaml/data.yaml. Standalone component — it has no dependency on the gradle plugin or any demo.
+description: How to USE the GridGain demo data generator — authoring ops.yaml/data.yaml, choosing rate kinds, transaction_scope, distribution (multi-pod), provisioning, live metrics, runtime rate control, and stopping a run cleanly. Use when configuring or running a data-generator scenario, debugging generator throughput/errors, driving load up/down at runtime, running a scenario until an operator stops it, deciding how to load a GridGain cluster, or editing ops.yaml/data.yaml. Standalone component — it has no dependency on the gradle plugin or any demo.
 ---
 
 # GridGain Demo Data Generator — Usage
@@ -30,7 +30,7 @@ metrics:                       # optional — live throughput/latency to Kafka (
   interval_ms: 1000
   histogram_highest_ms: 60000        # required from v6 — latency histogram ceiling
   histogram_significant_digits: 3    # required from v6 — HdrHistogram precision (1-4)
-control:                       # optional (v5+) — runtime rate control in (§Runtime control)
+control:                       # optional (v5+) — commands in: set_rate, stop (§Runtime control)
   kafka_bootstrap: "kafka:9092"
   topic: "datagen-control"
 otel:                          # optional — OpenTelemetry export (exporter: none|otlp|prometheus)
@@ -54,6 +54,29 @@ scenarios:
 **`rate` kinds:** `constant` (`ops_per_second`) · `ramped` (`from`, `to`, `over: <ISO-8601>`) · `stepped` (`steps: [{rate, hold: <ISO-8601>}]`, holds final rate after the last step).
 
 **`duration` kinds:** `time` (`value: <ISO-8601>`) · `count` (`value: <int>` ops) · `until_stop_condition` (paired with `stop_conditions[]`).
+
+**`stop_conditions` kinds** (optional list, ORed, evaluated after each op): `latency_p99_above` / `latency_p999_above` (`threshold: <ISO-8601>`) · `error_rate_above` (`threshold: 0.0–1.0`) · `external_signal` (no fields). A triggered stop is the run's outcome, not a crash — it lands in `result.yaml`'s `stop_reason`.
+
+**`external_signal` is what makes "run until stopped" real.** It declares that the scenario is *intentionally* unbounded and ends when an operator says so, delivered as a `stop` command on the control channel (§Runtime control):
+
+```yaml
+control:
+  kafka_bootstrap: "kafka:9092"
+  topic: "datagen-control"
+scenarios:
+  - name: run-until-stopped
+    root_schemas: [customer]
+    rate: { kind: constant, ops_per_second: 1000 }
+    duration: { kind: until_stop_condition }
+    stop_conditions:
+      - { kind: external_signal }
+    read_ratio: 0.0
+```
+
+- **It requires a top-level `control:` block.** Without one nothing can raise the signal, so the run would be unbounded and unstoppable short of a SIGTERM. `ExternalSignalControlValidator` fails the parse naming the scenario and the block to add.
+- **`external_signal` also lifts the internal safety cap** on `until_stop_condition`, which otherwise bounds such a run at one minute. Declaring the condition is the opt-in to a genuinely unbounded run; nothing else lifts the cap.
+- The threshold conditions only start judging after 100 operations (too few samples make a percentile meaningless). `external_signal` is checked *ahead* of that gate — an operator pressing stop is not a statistic, and at a low rate the 100th op could be minutes away.
+- `until_stop_condition` with **no** `stop_conditions` at all is not rejected — nothing rejected it before either — but it now logs a config warning, because nothing decides when such a run ends and it just runs into the one-minute cap.
 
 **`provisioning`:** `skip` (caches/tables must already exist — the norm when something else owns the schema) · `emit` (write cache XML / DDL to the output dir, don't apply) · `apply` (create absent caches/tables).
 
@@ -104,7 +127,8 @@ schemas:
 7. **ops `schema_version: 6` needs a generator built at or after 2026-08-18.** v6 makes `histogram_highest_ms` and `histogram_significant_digits` required inside `metrics:`. An older archive refuses the file outright ("only supports up to schema_version 5"), and a newer generator refuses a v6 `metrics:` block that omits either key. `MigrateOpsV5toV6` fills both in automatically — but it rewrites the file through SnakeYAML and **drops every comment**, so a hand-commented `ops.yaml` should be hand-edited instead. `histogram_significant_digits` is capped at 4: cost is ~100x per extra digit, and 5 would mean ~21 MB/sec of allocation per instance.
 8. **ops `schema_version: 7` invalidates every deployed generator archive.** v7 removes `targets:` and `scenario.target`; the cluster arrives as the required `--target-cluster` flag instead. The two directions both fail: a pre-v7 archive refuses a v7 file outright ("only supports up to schema_version 6"), and a v7 archive refuses to start without the flag. So upgrading an ops file is not a config-only change — **every** installed archive and image has to be rebuilt and redeployed alongside it, and any launcher that does not pass `--target-cluster` yet (a systemd unit, a k8s manifest, a script) has to be updated in the same pass. `MigrateOpsV6toV7` migrates the file automatically but rewrites it through SnakeYAML and **drops every comment**, so hand-edit a commented `ops.yaml` instead. It also **cannot** preserve the scenario→cluster wiring — nothing in v7 stores it — so it logs a WARN per scenario naming the cluster it discarded and the flag that now supplies it. Read those warnings before discarding the log; they are the only record of what your launch arguments should be.
 9. **SIGTERM is now a clean stop, inside a 10-second budget.** A JVM shutdown hook (registered in `ScenarioRunnerCli.run`, so both `Gg8Main` and `Gg9Main` get it) raises the run's stop signal, lets the **in-flight operation finish**, and then runs the normal end-of-run path: final `active=false` metrics snapshot with whole-run figures and the merged HdrHistogram, target close, `result.yaml`, `state.yaml`. The hook waits up to **10s** for that (`ScenarioRunnerCli.GRACEFUL_STOP_SECONDS`) before letting the JVM halt — a JVM in shutdown halts the moment its hooks return and does *not* wait for other threads, so the wait is what stops the process beating its own cleanup. 10s is sized to sit well inside both deadlines that kill the process: a pod's `terminationGracePeriodSeconds` (**30s**, the k8s default — the generator's Deployment does not set it) and the host systemd unit's `TimeoutStopSec` (from `host_timeouts.unit_active`, 120s in the shipped template). Overrun that and you get SIGKILL and no final snapshot, i.e. the old behaviour. `stop_reason` reads `stopped by signal: <why>`, distinct from `count reached` / `time elapsed` / `until_stop_condition cap reached` and from a triggered stop condition. Note a **SIGKILL still emits nothing** — the per-tick histogram (§Metrics) remains the fallback.
-10. **The `target` telemetry attribute now carries a cluster name, not a target alias.** The attribute *name* is unchanged (`target`), so existing queries keep resolving — but a dashboard that groups by it re-labels, showing cluster names where `targets[]` aliases used to appear. Panels keep working; saved queries filtering on a literal alias silently match nothing. This is the same class as the "metrics arrive, Prometheus is healthy, every panel is empty" failure: nothing errors, so only the graph tells you.
+10. **The control message gained a required `kind`, and the break is silent in both directions.** No ops schema version moves for this (`external_signal` and `control:`'s shape were already in ops v7), so **nothing in the config files tells you the fleet is out of date** — this is a *code* break with no version handshake behind it. A pre-`kind` archive accepts a new `set_rate` (it ignores the unknown `kind` field and finds the three fields it wants) but rejects a `stop` as "missing required field `targetTpsPerInstance`"; a new archive rejects the old undiscriminated payload outright. Either way the failure is a log line on the generator side, so from the sender's seat the rate slider works and the stop button does nothing. **Redeploy every archive and image in the same pass as the sender.**
+11. **The `target` telemetry attribute now carries a cluster name, not a target alias.** The attribute *name* is unchanged (`target`), so existing queries keep resolving — but a dashboard that groups by it re-labels, showing cluster names where `targets[]` aliases used to appear. Panels keep working; saved queries filtering on a literal alias silently match nothing. This is the same class as the "metrics arrive, Prometheus is healthy, every panel is empty" failure: nothing errors, so only the graph tells you.
 
 ## Metrics
 
@@ -121,17 +145,24 @@ schemas:
 
 ## Runtime control
 
-Only when `control:` is present (v5+). The generator consumes `ControlCommand` JSON from the named topic and adjusts its rate **without restarting** — this is how a UI drives load up and down mid-run.
+Only when `control:` is present (v5+). The generator consumes `ControlCommand` JSON from the named topic and acts on it **without restarting** — this is how a UI drives load up and down, and stops a run, mid-flight. **Two kinds**, discriminated by a required `kind` field:
 
 ```json
-{"runGroup": "20260809T101500Z", "targetTpsPerInstance": 250.0, "issuedAtMs": 1754731200000}
+{"kind": "set_rate", "runGroup": "20260809T101500Z", "targetTpsPerInstance": 250.0, "issuedAtMs": 1754731200000}
 ```
 
-- **`targetTpsPerInstance` is per instance, not the fleet total.** An instance cannot know how many peers are live, so the sender divides. `0.0` pauses the instance — it stays connected and keeps reporting, so graphs flatline rather than vanish.
-- An instance ignores commands whose `runGroup` is not its own, so one topic serves concurrent runs.
+```json
+{"kind": "stop", "runGroup": "20260809T101500Z", "issuedAtMs": 1754731200000}
+```
+
+- **`kind` is required, and there is no compatibility with the old flat message.** The pre-`kind` payload (`{runGroup, targetTpsPerInstance, issuedAtMs}` with no discriminator) is now rejected and logged, as is any unrecognised kind. **Every deployed generator archive and image must be redeployed** in the same pass as any sender that starts emitting the new shape — an old archive silently ignores `kind` (`set_rate` looks like an unknown field to it, so it reads as a rate command and still works) while a new archive silently ignores the old flat message, so a half-upgraded fleet responds to load commands but not to stop.
+- **`set_rate`'s `targetTpsPerInstance` is per instance, not the fleet total.** An instance cannot know how many peers are live, so the sender divides. `0.0` pauses the instance — it stays connected and keeps reporting, so graphs flatline rather than vanish. A `0.0`-paused instance is **still stoppable**: a `stop` releases the paused pacing loop.
+- **`stop` ends any run**, not only one declaring `external_signal` — it is an operator instruction, and refusing it for a `time`/`count` run would be surprising. It raises exactly the signal a SIGTERM does, so the instance finishes its in-flight operation and then emits its final `active=false` snapshot, closes its target and writes a real `result.yaml` (gotcha 9). A scenario declaring `external_signal` reports `stop_reason: external_signal raised: …`; any other run reports `stopped by signal: …`.
+- An instance ignores commands whose `runGroup` is not its own, so one topic serves concurrent runs — including a `stop`, which never crosses runs.
 - Every instance subscribes under a **unique consumer group**, so the topic broadcasts: one command reaches the whole fleet.
-- An override outranks the scenario's `rate:` schedule; the configured constant/ramp/step runs untouched until the first command arrives.
-- All three required fields must be present. A payload missing `targetTpsPerInstance` is rejected rather than defaulted — Jackson would fill it with `0.0`, silently pausing the fleet.
+- A rate override outranks the scenario's `rate:` schedule; the configured constant/ramp/step runs untouched until the first command arrives.
+- **Per-kind required fields, all checked before deserializing.** `set_rate` needs `runGroup`, `targetTpsPerInstance`, `issuedAtMs`; `stop` needs `runGroup`, `issuedAtMs`. A `set_rate` missing its rate is rejected rather than defaulted — Jackson would fill the `Double` with `0.0`, silently pausing the fleet.
+- Nothing here is fatal: a malformed, undiscriminated, mis-addressed or unusable command is logged and skipped. Losing control must never take down a running load test.
 
 ## CLI
 
@@ -148,7 +179,8 @@ are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
 - ops/data JSONSchema: `src/main/resources/schema/{ops,data}/` (per version)
 - rate limiters: `scenario/` (Constant/Ramped/Stepped, plus `ControllableRateLimiter` wrapping them for runtime override)
 - graceful stop: `scenario/StopSignal.kt` (the one signal every stop source raises) + the shutdown hook and `GRACEFUL_STOP_SECONDS` in `cli/ScenarioRunnerCli.kt`
-- runtime control: `control/` (`ControlCommand`, `ControlListener`, `KafkaControlListener`)
+- runtime control: `control/` (`ControlCommand` — the sealed `set_rate`/`stop` hierarchy and its per-kind required fields — plus `ControlListener`, `KafkaControlListener`)
+- stop conditions: `scenario/StopConditionEvaluator.kt`; the `external_signal`/`control:` rule is `ExternalSignalControlValidator` in `config/CrossElementValidator.kt`
 - transaction/atomicity rule: `target/Gg8KvTarget.kt` (gg8 module)
 - distribution/coordinator: `coordination/` package + the distribution validator
 - metrics: `metrics/` — `MetricsSnapshot`, `LiveMetricsReporter`, `KafkaMetricsSink`, `LatencyHistogramBounds`, `HistogramCodec`. OTel instruments (a separate, always-on export) are under `observability/`.

@@ -3,6 +3,7 @@ package com.gridgain.demo.datagen.scenario
 import com.gridgain.demo.datagen.config.ConstantRateSpec
 import com.gridgain.demo.datagen.config.CountDurationSpec
 import com.gridgain.demo.datagen.config.DataConfig
+import com.gridgain.demo.datagen.config.ExternalSignalStopSpec
 import com.gridgain.demo.datagen.config.RampedRateSpec
 import com.gridgain.demo.datagen.config.SchemaSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
@@ -73,7 +74,7 @@ class ScenarioRunner(
     }
 
     fun run(): ScenarioResult {
-        val evaluator = StopConditionEvaluator(scenario.stopConditions)
+        val evaluator = StopConditionEvaluator(scenario.stopConditions, stopSignal)
         instruments.targetRateRef.set(rateLimiter.currentTargetTps())
         totalAttempts = 0L
         startedNanos = System.nanoTime()
@@ -100,7 +101,17 @@ class ScenarioRunner(
                 exhaustedReason = "time elapsed"
             }
             is UntilStopDurationSpec -> {
-                notExhausted = { Duration.between(started, Instant.now()) < untilStopCap }
+                // `external_signal` is the scenario's explicit declaration that it is intentionally
+                // unbounded and ends when an operator says so, so [untilStopCap] must not apply to
+                // it — capping a "run until stopped" scenario would silently mean "run for a
+                // minute". Without that declaration the cap still bounds a scenario whose conditions
+                // might never trigger; ExternalSignalControlValidator warns about that shape.
+                notExhausted =
+                    if (scenario.stopConditions.any { it is ExternalSignalStopSpec }) {
+                        { true }
+                    } else {
+                        { Duration.between(started, Instant.now()) < untilStopCap }
+                    }
                 exhaustedReason = "until_stop_condition cap reached"
             }
         }

@@ -299,9 +299,11 @@ object ScenarioRunnerCli {
                 }
             }
 
-            // Runtime rate control (opt-in via ops.yaml `control:`): lets an external driver raise
-            // and lower load without restarting the run. Started before run() so a command that
-            // arrives immediately is not missed.
+            // Runtime control (opt-in via ops.yaml `control:`): lets an external driver raise and
+            // lower load, and stop the run, without restarting it. Started before run() so a
+            // command that arrives immediately is not missed. A `stop` command raises the same
+            // signal the shutdown hook does, so an operator stop and a SIGTERM end the run by
+            // exactly one code path.
             controlListener = resolution.parsedConfig.ops.control?.let { c ->
                 KafkaControlListener(
                     bootstrapServers = c.kafkaBootstrap,
@@ -309,6 +311,7 @@ object ScenarioRunnerCli {
                     runGroup = parsed.runGroup,
                     runId = runId,
                     setRate = rateLimiter::setRate,
+                    requestStop = { stopSignal.raise("operator stop command on the control channel") },
                 ).also {
                     it.start()
                     logger.lifecycle(

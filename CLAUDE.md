@@ -76,6 +76,14 @@ scenarios are deferred.
 - **Stop conditions.** Optional list, ORed: `latency_p99_above`,
   `latency_p999_above`, `error_rate_above`, `external_signal`. A triggered stop
   is recorded as the scenario outcome, not a crash.
+    - `external_signal` is delivered as a `stop` command on the runtime control
+      channel, so a scenario declaring it **must** also declare a top-level
+      `control:` block (`ExternalSignalControlValidator`). It is also what lifts
+      the internal safety cap on `until_stop_condition`, making "run until an
+      operator stops it" an unbounded run rather than a one-minute one.
+    - The threshold conditions only judge after 100 operations;
+      `external_signal` is evaluated ahead of that gate, because an operator
+      instruction is not a statistic.
 - **Transactional scope** (per scenario, KV mode). Optional field — omitted
   scenarios get `none`:
     - `none` *(default)* — no transaction wrapping; each `put()` standalone.
@@ -228,6 +236,8 @@ assemble`.
 Cross-element validation enforces:
 - Relation referential integrity.
 - `null_rate` not on relation columns.
+- `external_signal` requires a top-level `control:` block (and warns on
+  `until_stop_condition` with no stop conditions at all).
 - *(Scenario-to-target capability compatibility used to be enforced here and no longer
   is — see the warning under §Capabilities for what a third target kind must reinstate.)*
 - Affinity-vs-transaction warning from §2.
@@ -437,6 +447,7 @@ auto-loads when working in this repo and is referenced by consumers (e.g. the to
 
 **Maintenance rule (binding).** When you change the generator's config surface — an ops/data
 schema field, a rate or value-source kind, `transaction_scope`/distribution semantics, the metrics
-block, or the CLI — **update that SKILL.md in the same change and bump its *Last updated* date.**
+block, the control-channel message shape, or the CLI — **update that SKILL.md in the same change
+and bump its *Last updated* date.**
 The skill is standalone: it must never reference the gradle plugin or any demo. Prefer citing a
 source file over duplicating volatile detail.

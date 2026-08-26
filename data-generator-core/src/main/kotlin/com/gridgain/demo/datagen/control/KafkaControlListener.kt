@@ -11,7 +11,8 @@ import org.apache.kafka.common.errors.WakeupException
 import org.slf4j.LoggerFactory
 
 /**
- * Consumes [ControlCommand]s from a Kafka topic and applies them to this instance's rate limiter.
+ * Consumes [ControlCommand]s from a Kafka topic and applies them to this instance: a
+ * [SetRateCommand] re-paces the rate limiter, a [StopCommand] ends the run.
  *
  * Uses the same bus the live-metrics feed already travels, which is what makes runtime load control
  * work identically for an in-cluster pod, a local fork, and a host/VM install — no listening port,
@@ -24,6 +25,10 @@ import org.slf4j.LoggerFactory
  *
  * Failures are contained: a malformed payload or a rejected rate is logged and skipped, and a
  * broker outage retries with backoff. Losing control must never take down a running load test.
+ *
+ * Both actions arrive as callbacks rather than as the objects they act on, so this class stays a
+ * transport adapter with no view of the scenario package, and both paths are drivable in a test
+ * without a broker.
  */
 class KafkaControlListener(
     private val bootstrapServers: String,
@@ -31,6 +36,7 @@ class KafkaControlListener(
     private val runGroup: String,
     private val runId: String,
     private val setRate: (Double) -> Unit,
+    private val requestStop: () -> Unit,
 ) : ControlListener {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -84,20 +90,35 @@ class KafkaControlListener(
         }
     }
 
-    /** Parses one payload, drops it unless it addresses this run group, and applies the new rate.
-     *  Internal so the filter/apply behaviour is testable without a broker. */
+    /** Parses one payload, drops it unless it addresses this run group, and dispatches on its kind.
+     *  Internal so the filter/dispatch behaviour is testable without a broker. */
     internal fun handle(json: String?) {
         if (json.isNullOrBlank()) return
         val node = runCatching { mapper.readTree(json) }.getOrElse {
             log.warn("Ignoring malformed control command: {}", it.message)
             return
         }
-        // Jackson fills a missing `Double` creator parameter with 0.0 rather than failing, and 0.0
-        // means "pause". A truncated or half-written payload would therefore silently stop the
-        // whole fleet, so presence is checked explicitly instead of being inferred from a default.
-        val missing = REQUIRED_FIELDS.filterNot { node.hasNonNull(it) }
+        // `kind` is required with no fallback: guessing a kind for an undiscriminated payload would
+        // mean guessing whether the operator asked for a rate or a stop.
+        val kind = node.get("kind")?.takeIf { it.isTextual }?.asText()
+        if (kind == null) {
+            log.warn(
+                "Ignoring control command with no 'kind' discriminator (accepted kinds: {}): {}",
+                ACCEPTED_KINDS, json,
+            )
+            return
+        }
+        val required = REQUIRED_FIELDS_BY_KIND[kind]
+        if (required == null) {
+            log.warn("Ignoring control command of unknown kind '{}' (accepted kinds: {})", kind, ACCEPTED_KINDS)
+            return
+        }
+        // Presence is checked explicitly rather than inferred from a Jackson default: a missing
+        // `Double` creator parameter becomes 0.0, and 0.0 means "pause", so a truncated or
+        // half-written `set_rate` would otherwise silently stop the whole fleet.
+        val missing = required.filterNot { node.hasNonNull(it) }
         if (missing.isNotEmpty()) {
-            log.warn("Ignoring control command missing required field(s) {}: {}", missing, json)
+            log.warn("Ignoring '{}' control command missing required field(s) {}: {}", kind, missing, json)
             return
         }
         val command = runCatching { mapper.treeToValue(node, ControlCommand::class.java) }.getOrElse {
@@ -105,11 +126,27 @@ class KafkaControlListener(
             return
         }
         if (command.runGroup != runGroup) return
-        runCatching { setRate(command.targetTpsPerInstance) }.onFailure {
-            log.warn("Ignoring unusable control command ({}): {}", command.targetTpsPerInstance, it.message)
-            return
+        when (command) {
+            is SetRateCommand -> {
+                runCatching { setRate(command.targetTpsPerInstance) }.onFailure {
+                    log.warn(
+                        "Ignoring unusable control command ({}): {}",
+                        command.targetTpsPerInstance, it.message,
+                    )
+                    return
+                }
+                log.info("Control: target rate for this instance set to {} ops/sec", command.targetTpsPerInstance)
+            }
+            is StopCommand -> {
+                // Honoured whatever the scenario's duration is: this is an operator instruction, and
+                // refusing it for a timed run would be surprising.
+                runCatching { requestStop() }.onFailure {
+                    log.warn("Ignoring unusable stop command: {}", it.message)
+                    return
+                }
+                log.info("Control: stop requested; this instance will finish its in-flight operation and stop.")
+            }
         }
-        log.info("Control: target rate for this instance set to {} ops/sec", command.targetTpsPerInstance)
     }
 
     override fun close() {
@@ -118,6 +155,10 @@ class KafkaControlListener(
     }
 
     private companion object {
-        val REQUIRED_FIELDS = listOf("runGroup", "targetTpsPerInstance", "issuedAtMs")
+        val REQUIRED_FIELDS_BY_KIND: Map<String, List<String>> = mapOf(
+            SetRateCommand.KIND to SetRateCommand.REQUIRED_FIELDS,
+            StopCommand.KIND to StopCommand.REQUIRED_FIELDS,
+        )
+        val ACCEPTED_KINDS: List<String> = REQUIRED_FIELDS_BY_KIND.keys.toList()
     }
 }

@@ -64,6 +64,65 @@ class ConfigurationParserTest {
         assertThat(parsed.ops.scenarios.single().name).isEqualTo("load")
     }
 
+    /**
+     * The proof that implementing `external_signal` moved no schema version: `stop_conditions:
+     * [{kind: external_signal}]` and a top-level `control:` block are both already in the ops v7
+     * JSONSchema, so a "run until an operator stops it" file parses as v7 with no migration.
+     */
+    @Test
+    fun `a v7 ops file with external_signal and a control block parses unchanged`(@TempDir dir: Path) {
+        val data = copyResource(dir, "data-v2-customer.yaml", "data.yaml")
+        val ops = dir.resolve("ops.yaml")
+        ops.writeText(
+            """
+            schema_version: 7
+            control:
+              kafka_bootstrap: "kafka:9092"
+              topic: "datagen-control"
+            scenarios:
+              - name: run-until-stopped
+                root_schemas: [customer]
+                rate: { kind: constant, ops_per_second: 10 }
+                duration: { kind: until_stop_condition }
+                stop_conditions:
+                  - { kind: external_signal }
+                read_ratio: 0.0
+            """.trimIndent()
+        )
+
+        val parsed = ConfigurationParser(logger = logger).parse(dataFile = data.toFile(), opsFile = ops.toFile())
+
+        assertThat(parsed.ops.schemaVersion).isEqualTo(CURRENT_OPS_SCHEMA_VERSION)
+        assertThat(parsed.ops.control).isEqualTo(ControlSpec("kafka:9092", "datagen-control"))
+        assertThat(parsed.ops.scenarios.single().stopConditions).containsExactly(ExternalSignalStopSpec())
+    }
+
+    @Test
+    fun `external_signal without a control block is rejected by the parse pipeline`(@TempDir dir: Path) {
+        val data = copyResource(dir, "data-v2-customer.yaml", "data.yaml")
+        val ops = dir.resolve("ops.yaml")
+        ops.writeText(
+            """
+            schema_version: 7
+            scenarios:
+              - name: run-until-stopped
+                root_schemas: [customer]
+                rate: { kind: constant, ops_per_second: 10 }
+                duration: { kind: until_stop_condition }
+                stop_conditions:
+                  - { kind: external_signal }
+                read_ratio: 0.0
+            """.trimIndent()
+        )
+
+        assertThatThrownBy {
+            ConfigurationParser(logger = logger).parse(dataFile = data.toFile(), opsFile = ops.toFile())
+        }
+            .isInstanceOf(MisconfigurationException::class.java)
+            .hasMessageContaining("run-until-stopped")
+            .hasMessageContaining("control:")
+    }
+
     @Test
     fun `failure in JSONSchema stage surfaces as MisconfigurationException naming the file`(@TempDir dir: Path) {
         val data = dir.resolve("data.yaml").also { it.writeText("schema_version: 1\n") }

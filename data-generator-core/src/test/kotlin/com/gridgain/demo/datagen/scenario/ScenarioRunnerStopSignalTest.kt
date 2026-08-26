@@ -5,9 +5,11 @@ import com.gridgain.demo.datagen.config.ConstantRateSpec
 import com.gridgain.demo.datagen.config.CountDurationSpec
 import com.gridgain.demo.datagen.config.DataConfig
 import com.gridgain.demo.datagen.config.DurationSpec
+import com.gridgain.demo.datagen.config.ExternalSignalStopSpec
 import com.gridgain.demo.datagen.config.SchemaSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
+import com.gridgain.demo.datagen.config.StopConditionSpec
 import com.gridgain.demo.datagen.config.TimeDurationSpec
 import com.gridgain.demo.datagen.config.TransactionScope
 import com.gridgain.demo.datagen.config.UntilStopDurationSpec
@@ -68,12 +70,17 @@ class ScenarioRunnerStopSignalTest {
         SchemaSpec("customer", 0.0, listOf(ColumnSpec("id", 0.0, key = true, valueSource = SequenceSpec(1, 1))))
     ))
 
-    private fun scenario(name: String, duration: DurationSpec) = ScenarioSpec(
+    private fun scenario(
+        name: String,
+        duration: DurationSpec,
+        stopConditions: List<StopConditionSpec> = emptyList(),
+    ) = ScenarioSpec(
         name = name,
         rootSchemas = listOf("customer"),
         // Fast enough that the assertions are about the signal, never about pacing.
         rate = ConstantRateSpec(opsPerSecond = 100_000.0),
         duration = duration,
+        stopConditions = stopConditions,
         transactionScope = TransactionScope.NONE,
         readRatio = 0.0,
     )
@@ -135,6 +142,62 @@ class ScenarioRunnerStopSignalTest {
 
         assertThat(result.stopReason).isEqualTo("${ScenarioRunner.STOPPED_BY_SIGNAL}SIGTERM")
         assertThat(result.successCount).isEqualTo(7L)
+    }
+
+    @Test
+    fun `a scenario declaring external_signal reports the stop condition, not the raw signal`(
+        @TempDir dir: Path,
+    ) {
+        val signal = StopSignal()
+        val target = SignallingTarget(afterWrites = 4, signal = signal, reason = "operator stop command")
+        val scenario = scenario("unbounded", UntilStopDurationSpec(), listOf(ExternalSignalStopSpec()))
+
+        val result = runner(dir, scenario, target, signal).run()
+
+        assertThat(result.stopReason)
+            .describedAs("the scenario configured this condition; the result should name it")
+            .isEqualTo("external_signal raised: operator stop command")
+        assertThat(result.successCount).isEqualTo(4L)
+    }
+
+    @Test
+    fun `external_signal lifts the until_stop_condition safety cap`(@TempDir dir: Path) {
+        val signal = StopSignal()
+        val target = SignallingTarget(afterWrites = 50, signal = signal, reason = "SIGTERM")
+        val scenario = scenario("unbounded", UntilStopDurationSpec(), listOf(ExternalSignalStopSpec()))
+        val data = simpleData()
+        val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
+        val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
+        // A cap so short that any run still honouring it would stop on the cap, not on the signal.
+        val runner = ScenarioRunner(
+            scenario = scenario, data = data, generator = gen, target = target,
+            untilStopCap = Duration.ZERO, stopSignal = signal,
+        )
+
+        val result = runner.run()
+
+        assertThat(result.stopReason)
+            .describedAs("'run until stopped' must not silently mean 'run for a minute'")
+            .isEqualTo("external_signal raised: SIGTERM")
+        assertThat(result.successCount).isEqualTo(50L)
+    }
+
+    @Test
+    fun `without external_signal an until_stop_condition run still honours the cap`(@TempDir dir: Path) {
+        val signal = StopSignal()
+        val target = SignallingTarget(afterWrites = Int.MAX_VALUE, signal = signal, reason = "unused")
+        val data = simpleData()
+        val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
+        val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
+        val runner = ScenarioRunner(
+            scenario = scenario("capped", UntilStopDurationSpec()),
+            data = data, generator = gen, target = target,
+            untilStopCap = Duration.ofMillis(200), stopSignal = signal,
+        )
+
+        val result = runner.run()
+
+        assertThat(result.stopReason).isEqualTo("until_stop_condition cap reached")
     }
 
     @Test
