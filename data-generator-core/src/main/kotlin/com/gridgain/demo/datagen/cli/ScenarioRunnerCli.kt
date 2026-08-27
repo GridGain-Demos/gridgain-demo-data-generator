@@ -12,6 +12,7 @@ import com.gridgain.demo.datagen.control.KafkaControlListener
 import com.gridgain.demo.datagen.coordinator.Coordinator
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
+import com.gridgain.demo.datagen.generation.PartitionStripe
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
@@ -62,6 +63,14 @@ object ScenarioRunnerCli {
          * scenario.
          */
         val coordinator: Coordinator?,
+        /**
+         * The slice of the key space this process owns, or null when it owns all of it (today's
+         * single-process behaviour). Resolved once, here, from the two sources that can supply
+         * one — the [coordinator] in distributed mode and `--instance-index`/`--instance-count`
+         * on the command line — which is also where supplying both is refused. See
+         * [resolvePartitionStripe].
+         */
+        val partitionStripe: PartitionStripe?,
         val pendingEvents: MutableList<LifecycleEvent> = mutableListOf(),
     )
 
@@ -106,7 +115,41 @@ object ScenarioRunnerCli {
             openTelemetry = openTelemetry,
             instruments = instruments,
             coordinator = coordinator,
+            partitionStripe = resolvePartitionStripe(
+                coordinatorStripe = coordinator?.derivePartitionStripeLocally(),
+                cliStripe = parsed.instanceStripe,
+            ),
         )
+    }
+
+    /**
+     * Picks the one stripe that partitions this process's key space, from the two sources that can
+     * supply one.
+     *
+     * **Both is refused, not resolved.** A Coordinator stripe and a CLI stripe are two independent
+     * statements about which keys this process owns, and they will disagree: the Coordinator's is
+     * derived from the pod's identity against the scenario's `partition_count`, the CLI's from
+     * whatever the launcher was told. Preferring either one silently discards a key-space setting the
+     * operator explicitly passed — and a silently-discarded key-space setting is precisely the defect
+     * that lets N workers write the same keys (see [CliArgs.instanceStripe]). So it throws.
+     */
+    internal fun resolvePartitionStripe(
+        coordinatorStripe: PartitionStripe?,
+        cliStripe: PartitionStripe?,
+    ): PartitionStripe? {
+        if (coordinatorStripe != null && cliStripe != null) {
+            throw MisconfigurationException(
+                "this run is in distributed mode, which partitions the key space itself, and was also " +
+                    "given $INSTANCE_INDEX_FLAG ${cliStripe.partitionId} $INSTANCE_COUNT_FLAG " +
+                    "${cliStripe.partitionCount}. Those are two sources of truth for the same thing: " +
+                    "the coordinator has already assigned this instance stripe " +
+                    "${coordinatorStripe.partitionId}/${coordinatorStripe.partitionCount} from the " +
+                    "scenario's distribution block. Drop $INSTANCE_INDEX_FLAG and $INSTANCE_COUNT_FLAG " +
+                    "— they are for launching several generator processes outside Kubernetes, where " +
+                    "nothing else divides the key space."
+            )
+        }
+        return coordinatorStripe ?: cliStripe
     }
 
     /**
@@ -245,10 +288,15 @@ object ScenarioRunnerCli {
                 )
             }
 
-            val partitionStripe = resolution.coordinator?.derivePartitionStripeLocally()
+            val partitionStripe = resolution.partitionStripe
             if (partitionStripe != null) {
+                val source = if (resolution.coordinator != null) {
+                    "distributed mode: this pod"
+                } else {
+                    "$INSTANCE_INDEX_FLAG/$INSTANCE_COUNT_FLAG: this process"
+                }
                 logger.lifecycle(
-                    "distributed mode: this pod owns partition stripe " +
+                    "$source owns partition stripe " +
                         "${partitionStripe.partitionId}/${partitionStripe.partitionCount} " +
                         "(sequences will stride by ${partitionStripe.partitionCount}*step)."
                 )
