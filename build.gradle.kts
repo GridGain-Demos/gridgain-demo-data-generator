@@ -13,7 +13,16 @@ plugins {
 
 allprojects {
     group = "com.gridgain.demo"
-    version = "0.0.1-SNAPSHOT"
+    // Shares the toolkit's release version, and is bumped by the plugin's bin/bump-version.sh
+    // along with the rest of the release set.
+    //
+    // It sat at an eternal 0.0.1-SNAPSHOT while the plugin and UI moved through 0.5, 0.6 and 0.7,
+    // which meant no version number could express generator-vs-consumer skew: the UI takes a hard
+    // dependency on data-generator-core, so that coordinate reaches the UI's published POM, and a
+    // stale or unpublished generator makes the UI unresolvable for any consumer without mavenLocal.
+    // Sharing one version also aligns the OCI image tag, which defaults to project.version, with
+    // the plugin version the image resolver looks for.
+    version = "0.7.0-SNAPSHOT"
 
     repositories {
         mavenCentral()
