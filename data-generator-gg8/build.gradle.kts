@@ -11,7 +11,7 @@ dependencies {
     // produces — on Kubernetes as well as on hosts. 0.7.0 is also the first version with the
     // deployment_kind discriminator, without which a host cluster's entry cannot be read at all.
     // The public API is unchanged across the bump (DemoAddressFinder(String) + getAddresses()).
-    api("com.gridgain.demo:gg8-client-finder:0.7.0-SNAPSHOT")
+    api("com.gridgain.demo:gg8-client-finder:0.8.0-SNAPSHOT")
     api("org.gridgain:ignite-core:8.9.18")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")

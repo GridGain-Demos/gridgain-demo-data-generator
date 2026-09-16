@@ -9,7 +9,7 @@ dependencies {
     // 0.7.0-SNAPSHOT, not 0.5.0 — see the note in data-generator-gg8/build.gradle.kts. The plugin
     // writes client-endpoints.yaml at schema_version 2 and pre-0.7.0 finders expect version 1, so the
     // mismatch breaks address resolution on every platform, not just hosts.
-    api("com.gridgain.demo:gg9-client-finder:0.7.0-SNAPSHOT")
+    api("com.gridgain.demo:gg9-client-finder:0.8.0-SNAPSHOT")
     api("org.gridgain:ignite-client:9.1.3")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
