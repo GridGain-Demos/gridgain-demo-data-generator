@@ -22,7 +22,7 @@ allprojects {
     // stale or unpublished generator makes the UI unresolvable for any consumer without mavenLocal.
     // Sharing one version also aligns the OCI image tag, which defaults to project.version, with
     // the plugin version the image resolver looks for.
-    version = "0.7.0-SNAPSHOT"
+    version = "0.8.0-SNAPSHOT"
 
     repositories {
         mavenCentral()
