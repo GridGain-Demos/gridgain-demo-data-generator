@@ -6,7 +6,7 @@ import kotlin.test.Test
 class ScenarioRootSchemaValidatorTest {
 
     private fun col() = ColumnSpec("id", 0.0, SequenceSpec(1, 1))
-    private fun scenario(name: String, roots: List<String>) = ScenarioSpec(
+    private fun scenario(name: String, roots: List<String>) = ScenarioSpec(concurrency = 1, 
         name = name, rootSchemas = roots,
         rate = ConstantRateSpec(100.0),
         duration = TimeDurationSpec("PT10S"),

@@ -8,5 +8,7 @@ object OpsConfigMigrationRunner {
         MigrateOpsV4toV5(),
         MigrateOpsV5toV6(),
         MigrateOpsV6toV7(),
+        MigrateOpsV7toV8(),
+        MigrateOpsV8toV9(),
     ))
 }

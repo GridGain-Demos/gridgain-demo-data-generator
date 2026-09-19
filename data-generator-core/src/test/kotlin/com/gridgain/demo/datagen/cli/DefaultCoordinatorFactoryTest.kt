@@ -19,7 +19,7 @@ class DefaultCoordinatorFactoryTest {
         override fun debug(message: String) {}
     }
 
-    private fun scenario(distribution: DistributionSpec? = null) = ScenarioSpec(
+    private fun scenario(distribution: DistributionSpec? = null) = ScenarioSpec(concurrency = 1, 
         name = "load",
         rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0),

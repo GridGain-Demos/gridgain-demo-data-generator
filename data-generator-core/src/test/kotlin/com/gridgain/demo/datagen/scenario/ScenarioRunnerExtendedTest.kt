@@ -37,13 +37,13 @@ class ScenarioRunnerExtendedTest {
         val data = simpleData()
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
-        return ScenarioRunner(scenario = scenario, data = data, generator = gen, target = target,
+        return ScenarioRunner(scenario = scenario, data = data, generators = listOf(gen), target = target,
             untilStopCap = Duration.ofMillis(500))
     }
 
     @Test
     fun `ramped rate runs to completion`(@TempDir dir: Path) {
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "ramped-test",
             rootSchemas = listOf("customer"),
             rate = RampedRateSpec(from = 100.0, to = 1000.0, over = "PT0.1S"),
@@ -58,7 +58,7 @@ class ScenarioRunnerExtendedTest {
 
     @Test
     fun `stepped rate runs to completion`(@TempDir dir: Path) {
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "stepped-test",
             rootSchemas = listOf("customer"),
             rate = SteppedRateSpec(listOf(
@@ -76,7 +76,7 @@ class ScenarioRunnerExtendedTest {
 
     @Test
     fun `until_stop_condition runs until the cap`(@TempDir dir: Path) {
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "until-stop-no-stop",
             rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(opsPerSecond = 100.0),
@@ -102,7 +102,7 @@ class ScenarioRunnerExtendedTest {
             }
             override fun read(cacheName: String, key: Any): ReadOutcome = ReadOutcome(success = false)
         }
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "until-stop-on-error",
             rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(opsPerSecond = 1000.0),

@@ -30,13 +30,13 @@ class ScenarioRunnerKvSemanticsTest {
                        decisionSeed: Long = 1L): ScenarioRunner {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
-        return ScenarioRunner(scenario, data, gen, target, decisionRandom = Random(decisionSeed))
+        return ScenarioRunner(scenario, data, listOf(gen), target, decisionRandom = Random(decisionSeed))
     }
 
     @Test
     fun `read_ratio of zero produces only writes`(@TempDir dir: Path) {
         val target = InMemoryTarget()
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "writes-only", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(1000.0), duration = CountDurationSpec(50),
             transactionScope = TransactionScope.NONE, readRatio = 0.0,
@@ -49,7 +49,7 @@ class ScenarioRunnerKvSemanticsTest {
     @Test
     fun `read_ratio of half produces a mix once registry warms up`(@TempDir dir: Path) {
         val target = InMemoryTarget()
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "mix", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(2000.0), duration = CountDurationSpec(200),
             transactionScope = TransactionScope.NONE, readRatio = 0.5,
@@ -63,7 +63,7 @@ class ScenarioRunnerKvSemanticsTest {
     @Test
     fun `update_ratio reuses previously registered keys`(@TempDir dir: Path) {
         val target = InMemoryTarget()
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "update-heavy", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(2000.0), duration = CountDurationSpec(100),
             transactionScope = TransactionScope.NONE, readRatio = 0.0,

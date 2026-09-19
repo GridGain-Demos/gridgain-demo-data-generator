@@ -37,7 +37,7 @@ class ConfigurationParserTest {
     }
 
     @Test
-    fun `a v6 ops file with targets migrates, validates and parses as v7`(@TempDir dir: Path) {
+    fun `a v6 ops file with targets migrates, validates and parses at the current version`(@TempDir dir: Path) {
         val data = copyResource(dir, "data-v2-customer.yaml", "data.yaml")
         val ops = dir.resolve("ops.yaml")
         ops.writeText(
@@ -60,8 +60,83 @@ class ConfigurationParserTest {
         val parser = ConfigurationParser(logger = logger)
         val parsed = parser.parse(dataFile = data.toFile(), opsFile = ops.toFile())
 
-        assertThat(parsed.ops.schemaVersion).isEqualTo(7)
+        assertThat(parsed.ops.schemaVersion).isEqualTo(CURRENT_OPS_SCHEMA_VERSION)
         assertThat(parsed.ops.scenarios.single().name).isEqualTo("load")
+        assertThat(parsed.ops.scenarios.single().concurrency)
+            .describedAs("a file written before concurrency existed must still run single-threaded")
+            .isEqualTo(1)
+    }
+
+    /**
+     * The point of ops v9: a channel can name a `message_brokers` element instead of repeating an
+     * address the toolkit already knows. Parsed here through the real pipeline, because the shape
+     * has to survive JSONSchema validation and Jackson's `kind` discriminator, not just a unit
+     * construction.
+     */
+    @Test
+    fun `a v9 ops file naming a message broker element parses to an element ref`(@TempDir dir: Path) {
+        val data = copyResource(dir, "data-v2-customer.yaml", "data.yaml")
+        val ops = dir.resolve("ops.yaml")
+        ops.writeText(
+            """
+            schema_version: 9
+            metrics:
+              broker: { kind: element, name: payments-bus }
+              topic: "datagen-metrics"
+              histogram_highest_ms: 60000
+              histogram_significant_digits: 3
+            control:
+              broker: { kind: address, bootstrap_servers: "10.0.0.5:9092" }
+              topic: "datagen-control"
+            scenarios:
+              - name: run-until-stopped
+                root_schemas: [customer]
+                concurrency: 4
+                rate: { kind: constant, ops_per_second: 10 }
+                duration: { kind: until_stop_condition }
+                stop_conditions:
+                  - { kind: external_signal }
+                read_ratio: 0.0
+            """.trimIndent()
+        )
+
+        val parsed = ConfigurationParser(logger = logger).parse(dataFile = data.toFile(), opsFile = ops.toFile())
+
+        // The two forms are independent per channel: a demo may publish metrics to a broker it
+        // deployed while driving control through one it does not own.
+        assertThat(parsed.ops.metrics!!.broker).isEqualTo(ElementBrokerRef("payments-bus"))
+        assertThat(parsed.ops.control!!.broker).isEqualTo(AddressBrokerRef("10.0.0.5:9092"))
+    }
+
+    /**
+     * A block naming neither form must be refused rather than quietly left without a broker — the
+     * whole point of the `oneOf` is that the document says which it means.
+     */
+    @Test
+    fun `a v9 metrics block with a broker of no known kind is rejected`(@TempDir dir: Path) {
+        val data = copyResource(dir, "data-v2-customer.yaml", "data.yaml")
+        val ops = dir.resolve("ops.yaml")
+        ops.writeText(
+            """
+            schema_version: 9
+            metrics:
+              broker: { kind: element, bootstrap_servers: "10.0.0.5:9092" }
+              topic: "datagen-metrics"
+              histogram_highest_ms: 60000
+              histogram_significant_digits: 3
+            scenarios:
+              - name: load
+                root_schemas: [customer]
+                concurrency: 1
+                rate: { kind: constant, ops_per_second: 10 }
+                duration: { kind: count, value: 10 }
+                read_ratio: 0.0
+            """.trimIndent()
+        )
+
+        assertThatThrownBy {
+            ConfigurationParser(logger = logger).parse(dataFile = data.toFile(), opsFile = ops.toFile())
+        }.hasMessageContaining("broker")
     }
 
     /**
@@ -93,7 +168,10 @@ class ConfigurationParserTest {
         val parsed = ConfigurationParser(logger = logger).parse(dataFile = data.toFile(), opsFile = ops.toFile())
 
         assertThat(parsed.ops.schemaVersion).isEqualTo(CURRENT_OPS_SCHEMA_VERSION)
-        assertThat(parsed.ops.control).isEqualTo(ControlSpec("kafka:9092", "datagen-control"))
+        // Proves the v8 -> v9 migration end to end: the fixture's `kafka_bootstrap` literal is
+        // rewritten into an address broker ref by the real parse pipeline, not by a unit stub.
+        assertThat(parsed.ops.control)
+            .isEqualTo(ControlSpec(AddressBrokerRef("kafka:9092"), "datagen-control"))
         assertThat(parsed.ops.scenarios.single().stopConditions).containsExactly(ExternalSignalStopSpec())
     }
 

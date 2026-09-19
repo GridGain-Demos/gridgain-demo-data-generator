@@ -10,7 +10,7 @@ class DistributionValidatorTest {
         listOf(SchemaSpec("customer", 0.0,
             listOf(ColumnSpec("id", 0.0, key = true, valueSource = SequenceSpec(1, 1))))),
     )
-    private fun scenario(name: String, distribution: DistributionSpec?) = ScenarioSpec(
+    private fun scenario(name: String, distribution: DistributionSpec?) = ScenarioSpec(concurrency = 1, 
         name = name, rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0), duration = TimeDurationSpec("PT1S"),
         readRatio = 0.0,

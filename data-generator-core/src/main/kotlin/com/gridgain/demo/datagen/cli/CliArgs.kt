@@ -1,5 +1,6 @@
 package com.gridgain.demo.datagen.cli
 
+import com.gridgain.demo.datagen.brokers.BrokerEndpointsSource
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.PartitionStripe
 import java.nio.file.Path
@@ -51,6 +52,19 @@ data class CliArgs(
      * both sides, and 50M+ operations left 383 MB of data because they were overwriting each other.
      */
     val instanceStripe: PartitionStripe? = null,
+    /**
+     * Where to resolve `broker: { kind: element, name: ... }` references from — the
+     * `broker-endpoints.yaml` the demo toolkit writes when it deploys a `message_brokers` element.
+     *
+     * Optional, and deliberately not in [REQUIRED_FLAGS]: a demo with no message broker has no
+     * such file, and a standalone run using literal `kind: address` blocks never needs one.
+     * Requiring it would break every existing invocation to serve a file most demos do not have.
+     *
+     * A sealed source rather than a nullable path, so "none was supplied" is a state the resolver
+     * can give its own error for — that failure wants to name the flag, while a supplied-but-wrong
+     * path wants to name the path.
+     */
+    val brokerEndpoints: BrokerEndpointsSource = BrokerEndpointsSource.Absent,
 )
 
 private val REQUIRED_FLAGS = listOf(
@@ -61,8 +75,12 @@ private val REQUIRED_FLAGS = listOf(
 internal const val INSTANCE_INDEX_FLAG = "--instance-index"
 internal const val INSTANCE_COUNT_FLAG = "--instance-count"
 
+/** Carries [CliArgs.brokerEndpoints]. See that field for why it is optional. */
+internal const val BROKER_ENDPOINTS_FLAG = "--broker-endpoints"
+
 private const val OPTIONAL_FLAGS_SUFFIX =
-    "optional: --otel-endpoint-override <url>, $INSTANCE_INDEX_FLAG <i> $INSTANCE_COUNT_FLAG <n> (both or neither)."
+    "optional: --otel-endpoint-override <url>, $BROKER_ENDPOINTS_FLAG <path>, " +
+        "$INSTANCE_INDEX_FLAG <i> $INSTANCE_COUNT_FLAG <n> (both or neither)."
 
 fun parseArgs(args: Array<String>): CliArgs {
     val map = mutableMapOf<String, String>()
@@ -90,6 +108,9 @@ fun parseArgs(args: Array<String>): CliArgs {
         targetCluster = required(map, "--target-cluster"),
         otelEndpointOverride = map["--otel-endpoint-override"]?.takeIf { it.isNotBlank() },
         instanceStripe = parseInstanceStripe(map),
+        brokerEndpoints = map[BROKER_ENDPOINTS_FLAG]?.takeIf { it.isNotBlank() }
+            ?.let { BrokerEndpointsSource.At(Paths.get(it)) }
+            ?: BrokerEndpointsSource.Absent,
     )
 }
 

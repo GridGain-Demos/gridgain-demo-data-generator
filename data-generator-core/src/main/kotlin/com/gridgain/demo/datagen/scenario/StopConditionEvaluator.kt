@@ -6,6 +6,7 @@ import com.gridgain.demo.datagen.config.LatencyP99StopSpec
 import com.gridgain.demo.datagen.config.LatencyP999StopSpec
 import com.gridgain.demo.datagen.config.StopConditionSpec
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Evaluates a scenario's `stop_conditions` after each operation.
@@ -23,12 +24,15 @@ class StopConditionEvaluator(
      *  conditions rather than only the run loop's catch-all. */
     private val watchesExternalSignal: Boolean = conditions.any { it is ExternalSignalStopSpec }
 
-    private var successCount: Long = 0
-    private var failureCount: Long = 0
+    // Atomic because with `concurrency > 1` every worker thread reports here while the run loop
+    // evaluates: a plain `Long` incremented from several threads is a data race, and an
+    // undercount silently disarms the error-rate threshold that is meant to abort a failing run.
+    private val successCount = AtomicLong(0)
+    private val failureCount = AtomicLong(0)
     private val latency: LatencyHistogram = LatencyHistogram()
 
     fun recordOutcome(success: Boolean, latencyNanos: Long = 0L) {
-        if (success) successCount++ else failureCount++
+        if (success) successCount.incrementAndGet() else failureCount.incrementAndGet()
         if (latencyNanos > 0) latency.record(latencyNanos)
     }
 
@@ -41,9 +45,12 @@ class StopConditionEvaluator(
             val raised = stopSignal.reason()
             if (raised != null) return "external_signal raised: $raised"
         }
-        val total = successCount + failureCount
+        // Read once each: the two counters move independently, and re-reading them below could
+        // otherwise compute a rate against a total that no longer matches its numerator.
+        val failures = failureCount.get()
+        val total = successCount.get() + failures
         if (total < 100) return null
-        val errorRate = failureCount.toDouble() / total
+        val errorRate = failures.toDouble() / total
         for (c in conditions) {
             when (c) {
                 is ErrorRateStopSpec -> {

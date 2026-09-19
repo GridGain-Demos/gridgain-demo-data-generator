@@ -21,11 +21,22 @@ import com.gridgain.demo.datagen.target.TransactionOutcome
 import java.time.Duration
 import java.time.Instant
 import java.util.Random
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class ScenarioRunner(
     private val scenario: ScenarioSpec,
     private val data: DataConfig,
-    private val generator: BusinessEventGenerator,
+    /**
+     * One generator per worker thread; the size of this list **is** the run's concurrency.
+     *
+     * Modelled as a list rather than as a generator plus a separate `concurrency: Int` so the two
+     * cannot disagree: a worker without its own generator would share a sequence cursor with
+     * another and emit duplicate primary keys. Each generator is expected to have been built over
+     * a [com.gridgain.demo.datagen.generation.workerStripe] so their key spaces are disjoint —
+     * see `ScenarioRunnerCli.run`, which is what composes them.
+     */
+    private val generators: List<BusinessEventGenerator>,
     private val target: Target,
     private val untilStopCap: Duration = Duration.ofMinutes(1),
     private val decisionRandom: Random = Random(),
@@ -52,8 +63,8 @@ class ScenarioRunner(
     private val stopSignal: StopSignal = StopSignal(),
 ) {
 
-    private var totalAttempts: Long = 0L
-    private var startedNanos: Long = 0L
+    private val totalAttempts = AtomicLong(0L)
+    @Volatile private var startedNanos: Long = 0L
     /** Captures the post-run registry contents for `state.yaml`. Safe to call multiple times. */
     fun keyRegistrySnapshot(): List<KeyRegistryState> = keyRegistry.snapshot()
 
@@ -67,6 +78,11 @@ class ScenarioRunner(
     }
 
     init {
+        require(generators.isNotEmpty()) {
+            "ScenarioRunner needs at least one generator: the list's size is the run's " +
+                "concurrency, and a run with no workers would do nothing. Pass one generator " +
+                "per worker thread."
+        }
         // A generator paused at rate 0.0 is parked inside the limiter, not in the loop, so it would
         // never reach the stop check below. Pushing the release to it is what lets a paused fleet be
         // stopped at all.
@@ -76,12 +92,14 @@ class ScenarioRunner(
     fun run(): ScenarioResult {
         val evaluator = StopConditionEvaluator(scenario.stopConditions, stopSignal)
         instruments.targetRateRef.set(rateLimiter.currentTargetTps())
-        totalAttempts = 0L
+        totalAttempts.set(0L)
         startedNanos = System.nanoTime()
         val started = Instant.now()
-        var success = 0L
-        var error = 0L
-        var stopReason = ""
+        // Atomic because every worker thread reports into them and the duration predicate below
+        // reads them. The first worker to reach a stop wins and the rest observe it and finish.
+        val success = AtomicLong(0L)
+        val error = AtomicLong(0L)
+        val stopReason = AtomicReference("")
 
         // The three duration kinds differ only in when they are exhausted, so they share one loop.
         // They used to have one loop each, which was fine while the only early exit was the stop
@@ -92,7 +110,11 @@ class ScenarioRunner(
         val exhaustedReason: String
         when (val d = scenario.duration) {
             is CountDurationSpec -> {
-                notExhausted = { success + error < d.value }
+                // With N workers this can overshoot by up to N-1: several may pass the check
+                // before any of them records its outcome. Bounding it exactly would mean
+                // reserving a slot per operation, which puts a contended atomic ahead of every
+                // tick to buy precision no load test asks for.
+                notExhausted = { success.get() + error.get() < d.value }
                 exhaustedReason = "count reached"
             }
             is TimeDurationSpec -> {
@@ -116,32 +138,77 @@ class ScenarioRunner(
             }
         }
 
-        while (notExhausted()) {
-            // Read before the tick rather than after it, so a signal raised mid-tick lets that tick
-            // finish and costs no further operation.
-            val signalled = stopSignal.reason()
-            if (signalled != null) { stopReason = "$STOPPED_BY_SIGNAL$signalled"; break }
-            val s = tick(rateLimiter, evaluator)
-            if (s) success++ else error++
-            val triggered = evaluator.shouldStop()
-            if (triggered != null) { stopReason = triggered; break }
+        if (generators.size == 1) {
+            // Deliberately inline rather than a one-element thread pool: a single-worker run must
+            // stay exactly what it was before concurrency existed, on the caller's own thread.
+            workerLoop(generators[0], evaluator, notExhausted, success, error, stopReason)
+        } else {
+            val workers = generators.mapIndexed { index, gen ->
+                Thread(
+                    { workerLoop(gen, evaluator, notExhausted, success, error, stopReason) },
+                    "datagen-worker-$index",
+                )
+            }
+            workers.forEach { it.start() }
+            // run() must not return while a worker is still writing: the caller closes the target
+            // and flushes the final metrics snapshot the moment it does.
+            workers.forEach { it.join() }
         }
-        if (stopReason.isEmpty()) stopReason = exhaustedReason
+        stopReason.compareAndSet("", exhaustedReason)
 
         val wall = Duration.between(started, Instant.now())
+        val successes = success.get()
+        val errors = error.get()
         val achievedRate = if (wall.toNanos() > 0)
-            (success + error).toDouble() / (wall.toNanos() / 1_000_000_000.0) else 0.0
+            (successes + errors).toDouble() / (wall.toNanos() / 1_000_000_000.0) else 0.0
         return ScenarioResult(
             scenarioName = scenario.name,
             achievedRate = achievedRate,
-            errorCount = error,
-            successCount = success,
-            stopReason = stopReason,
+            errorCount = errors,
+            successCount = successes,
+            stopReason = stopReason.get(),
             wallTime = wall,
         )
     }
 
-    private fun tick(rateLimiter: RateLimiter, evaluator: StopConditionEvaluator): Boolean {
+    /**
+     * One worker's loop. Every worker runs this against its own [generator] and the run's shared
+     * limiter, evaluator, registry and counters.
+     *
+     * A worker stops when the duration is exhausted, when the stop signal is raised, when a stop
+     * condition triggers, or when **another worker** has already recorded a reason — that last
+     * check is what makes one worker's stop end the whole run rather than only itself.
+     */
+    private fun workerLoop(
+        generator: BusinessEventGenerator,
+        evaluator: StopConditionEvaluator,
+        notExhausted: () -> Boolean,
+        success: AtomicLong,
+        error: AtomicLong,
+        stopReason: AtomicReference<String>,
+    ) {
+        while (notExhausted() && stopReason.get().isEmpty()) {
+            // Read before the tick rather than after it, so a signal raised mid-tick lets that tick
+            // finish and costs no further operation.
+            val signalled = stopSignal.reason()
+            if (signalled != null) {
+                // compareAndSet, not set: the first reason recorded is the one that ended the run,
+                // and a later worker noticing the same signal must not overwrite it.
+                stopReason.compareAndSet("", "$STOPPED_BY_SIGNAL$signalled")
+                break
+            }
+            val s = tick(generator, rateLimiter, evaluator)
+            if (s) success.incrementAndGet() else error.incrementAndGet()
+            val triggered = evaluator.shouldStop()
+            if (triggered != null) { stopReason.compareAndSet("", triggered); break }
+        }
+    }
+
+    private fun tick(
+        generator: BusinessEventGenerator,
+        rateLimiter: RateLimiter,
+        evaluator: StopConditionEvaluator,
+    ): Boolean {
         rateLimiter.acquire()
         // Re-published every tick because the target moves: a ramp/step walks it, and the control
         // channel can override it at any moment. One atomic store is nothing next to the round trip
@@ -211,9 +278,9 @@ class ScenarioRunner(
         }
         evaluator.recordOutcome(success = success, latencyNanos = latencyNanos)
 
-        totalAttempts++
+        val attempts = totalAttempts.incrementAndGet()
         val elapsedSec = (System.nanoTime() - startedNanos) / 1_000_000_000.0
-        if (elapsedSec > 0) instruments.observedRateRef.set(totalAttempts / elapsedSec)
+        if (elapsedSec > 0) instruments.observedRateRef.set(attempts / elapsedSec)
         return success
     }
 

@@ -208,7 +208,7 @@ class OpsConfigMigrationRunnerTest {
     }
 
     @Test
-    fun `migrates a v6 file with targets all the way to v7`(@TempDir dir: Path) {
+    fun `migrates a v6 file with targets all the way to the current version`(@TempDir dir: Path) {
         val file = dir.resolve("ops.yaml").also {
             it.writeText(
                 """
@@ -231,8 +231,11 @@ class OpsConfigMigrationRunnerTest {
         val text = OpsConfigMigrationRunner.create()
             .ensureCurrentVersion(file.toFile(), targetVersion = CURRENT_OPS_SCHEMA_VERSION, logger = logger)
 
-        assertThat(text).contains("schema_version: 7")
+        assertThat(text).contains("schema_version: $CURRENT_OPS_SCHEMA_VERSION")
         assertThat(text).doesNotContain("targets")
         assertThat(text).doesNotContain("target:")
+        assertThat(text)
+            .describedAs("v7 -> v8 fills concurrency so the upgraded file runs as it did before")
+            .contains("concurrency: 1")
     }
 }

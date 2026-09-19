@@ -1,6 +1,7 @@
 package com.gridgain.demo.datagen.cli
 
 import com.gridgain.demo.datagen.config.CURRENT_STATE_SCHEMA_VERSION
+import com.gridgain.demo.datagen.brokers.BrokerDirectory
 import com.gridgain.demo.datagen.config.ConfigurationParser
 import com.gridgain.demo.datagen.config.OtelExporter
 import com.gridgain.demo.datagen.config.OtelSpec
@@ -11,9 +12,8 @@ import com.gridgain.demo.datagen.control.ControlListener
 import com.gridgain.demo.datagen.control.KafkaControlListener
 import com.gridgain.demo.datagen.coordinator.Coordinator
 import com.gridgain.demo.datagen.errors.MisconfigurationException
-import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.PartitionStripe
-import com.gridgain.demo.datagen.generation.ValueSourceFactory
+import com.gridgain.demo.datagen.generation.WorkerGenerators
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
 import com.gridgain.demo.datagen.metrics.KafkaMetricsSink
@@ -37,7 +37,6 @@ import com.gridgain.demo.datagen.state.StatePersister
 import com.gridgain.demo.datagen.target.Target
 import io.fabric8.kubernetes.client.KubernetesClientBuilder
 import io.opentelemetry.api.OpenTelemetry
-import net.datafaker.Faker
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
@@ -71,6 +70,12 @@ object ScenarioRunnerCli {
          * [resolvePartitionStripe].
          */
         val partitionStripe: PartitionStripe?,
+        /**
+         * Resolves a `metrics:`/`control:` broker reference to an address. Always present — a run
+         * launched without `--broker-endpoints` gets [BrokerDirectory.notSupplied], which serves
+         * literal `kind: address` refs and explains itself for named ones.
+         */
+        val brokerDirectory: BrokerDirectory,
         val pendingEvents: MutableList<LifecycleEvent> = mutableListOf(),
     )
 
@@ -107,6 +112,16 @@ object ScenarioRunnerCli {
         val instruments = Instruments(openTelemetry)
         val coordinator = coordinatorFactory.build(scenario, System::getenv, logger)
 
+        // Resolved here, beside the client-endpoints wiring above, and checked eagerly rather than
+        // where the channels are built. By that point the run has connected its target and
+        // provisioned tables; discovering there that it cannot resolve its metrics broker means
+        // real work already done, and a telemetry channel that silently produced nothing is the
+        // exact failure this mechanism exists to prevent. Called for effect — the values are
+        // recomputed at the call sites, which by then cannot fail.
+        val brokerDirectory = BrokerDirectory.load(parsed.brokerEndpoints)
+        parsedConfig.ops.metrics?.let { brokerDirectory.bootstrapServersFor(it.broker, "metrics") }
+        parsedConfig.ops.control?.let { brokerDirectory.bootstrapServersFor(it.broker, "control") }
+
         return Resolution(
             parsedConfig = parsedConfig,
             scenario = scenario,
@@ -119,6 +134,7 @@ object ScenarioRunnerCli {
                 coordinatorStripe = coordinator?.derivePartitionStripeLocally(),
                 cliStripe = parsed.instanceStripe,
             ),
+            brokerDirectory = brokerDirectory,
         )
     }
 
@@ -301,20 +317,24 @@ object ScenarioRunnerCli {
                         "(sequences will stride by ${partitionStripe.partitionCount}*step)."
                 )
             }
-            val factory = ValueSourceFactory(
+            val rootSchema = resolution.scenario.rootSchemas.first()
+            val concurrency = resolution.scenario.concurrency
+            val workers = WorkerGenerators(
+                data = resolution.parsedConfig.data,
+                rootSchemaName = rootSchema,
                 yamlDataRoot = parsed.dataFile.parent,
                 seed = 0L,
                 loadedState = loadedState,
-                partitionStripe = partitionStripe,
+                processStripe = partitionStripe,
+                concurrency = concurrency,
             )
-            val rootSchema = resolution.scenario.rootSchemas.first()
-            val gen = BusinessEventGenerator(
-                data = resolution.parsedConfig.data,
-                rootSchemaName = rootSchema,
-                factory = factory,
-                faker = Faker(),
-                cohortSeed = 0L,
-            )
+            if (concurrency > 1) {
+                logger.lifecycle(
+                    "concurrency: $concurrency worker threads in this process, each holding one " +
+                        "operation in flight. The scenario's rate is the target for the process as " +
+                        "a whole, shared by the workers, not a per-thread figure."
+                )
+            }
 
             val keyRegistry = KeyRegistry()
             if (loadedState != null) keyRegistry.restore(loadedState.keys)
@@ -332,7 +352,11 @@ object ScenarioRunnerCli {
             metricsReporter = resolution.parsedConfig.ops.metrics?.let { m ->
                 LiveMetricsReporter(
                     recorder = metricsRecorder,
-                    sink = KafkaMetricsSink(bootstrapServers = m.kafkaBootstrap, topic = m.topic),
+                    sink = KafkaMetricsSink(
+                        bootstrapServers = resolution.brokerDirectory
+                            .bootstrapServersFor(m.broker, "metrics"),
+                        topic = m.topic,
+                    ),
                     targetTps = rateLimiter::currentTargetTps,
                     runGroup = parsed.runGroup,
                     runId = runId,
@@ -354,7 +378,8 @@ object ScenarioRunnerCli {
             // exactly one code path.
             controlListener = resolution.parsedConfig.ops.control?.let { c ->
                 KafkaControlListener(
-                    bootstrapServers = c.kafkaBootstrap,
+                    bootstrapServers = resolution.brokerDirectory
+                        .bootstrapServersFor(c.broker, "control"),
                     topic = c.topic,
                     runGroup = parsed.runGroup,
                     runId = runId,
@@ -372,7 +397,7 @@ object ScenarioRunnerCli {
             val runner = ScenarioRunner(
                 scenario = resolution.scenario,
                 data = resolution.parsedConfig.data,
-                generator = gen,
+                generators = workers.generators,
                 target = target,
                 keyRegistry = keyRegistry,
                 instruments = resolution.instruments,
@@ -404,7 +429,7 @@ object ScenarioRunnerCli {
 
             val newState = GeneratorState(
                 schemaVersion = CURRENT_STATE_SCHEMA_VERSION,
-                sequences = factory.snapshotSequences(),
+                sequences = workers.snapshotSequences(),
                 keys = runner.keyRegistrySnapshot(),
                 runHistory = (loadedState?.runHistory ?: emptyList()) + RunHistoryEntry(
                     runId = runId,

@@ -221,11 +221,16 @@ class ExternalSignalControlValidator : CrossElementValidator {
             if (scenario.stopConditions.any { it is ExternalSignalStopSpec } && ops.control == null) {
                 errors += "scenario '${scenario.name}' declares the stop condition 'external_signal', " +
                     "but ops.yaml has no top-level 'control:' block — so nothing can ever deliver the " +
-                    "signal and the run would be unstoppable short of a SIGTERM. Add the block:\n" +
+                    "signal and the run would be unstoppable short of a SIGTERM. Add the block, " +
+                    "naming a message broker the toolkit deployed:\n" +
                     "        control:\n" +
-                    "          kafka_bootstrap: \"<broker host:port reachable from the generator>\"\n" +
+                    "          broker:\n" +
+                    "            kind: element\n" +
+                    "            name: \"<the message_brokers entry in demo-config.yaml>\"\n" +
                     "          topic: \"datagen-control\"\n" +
-                    "      or remove the 'external_signal' stop condition from the scenario."
+                    "      or, for a broker this demo does not own, 'kind: address' with " +
+                    "'bootstrap_servers: \"<host:port reachable from the generator>\"'; " +
+                    "or remove the 'external_signal' stop condition from the scenario."
             }
             if (scenario.duration is UntilStopDurationSpec && scenario.stopConditions.isEmpty()) {
                 warnings += "scenario '${scenario.name}' has duration kind 'until_stop_condition' but " +

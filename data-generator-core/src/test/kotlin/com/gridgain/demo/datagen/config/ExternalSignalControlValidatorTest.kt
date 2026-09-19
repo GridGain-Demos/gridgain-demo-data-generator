@@ -15,7 +15,7 @@ class ExternalSignalControlValidatorTest {
         name: String,
         duration: DurationSpec,
         stopConditions: List<StopConditionSpec>,
-    ) = ScenarioSpec(
+    ) = ScenarioSpec(concurrency = 1, 
         name = name, rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0), duration = duration,
         stopConditions = stopConditions, readRatio = 0.0,
@@ -27,7 +27,7 @@ class ExternalSignalControlValidatorTest {
         scenarios = listOf(scenario),
     )
 
-    private val control = ControlSpec(kafkaBootstrap = "kafka:9092", topic = "datagen-control")
+    private val control = ControlSpec(broker = AddressBrokerRef("kafka:9092"), topic = "datagen-control")
 
     @Test
     fun `accepts external_signal when ops declares a control block`() {
@@ -52,7 +52,10 @@ class ExternalSignalControlValidatorTest {
             .contains("scenario 'run-until-stopped'")
             .contains("external_signal")
             .contains("control:")
-            .contains("kafka_bootstrap")
+            // v9 shape: the remediation offers the element reference first, because a broker the
+            // toolkit deployed is the common case and needs no address typed in.
+            .contains("kind: element")
+            .contains("kind: address")
             .contains("topic")
     }
 

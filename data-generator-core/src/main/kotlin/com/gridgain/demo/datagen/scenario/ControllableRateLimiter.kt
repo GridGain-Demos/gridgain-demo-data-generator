@@ -1,5 +1,6 @@
 package com.gridgain.demo.datagen.scenario
 
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 
 /**
@@ -32,7 +33,24 @@ class ControllableRateLimiter(
      *  ending and must not park again. */
     @Volatile private var released: Boolean = false
 
-    private var nextAllowedNanos: Long = nanoTime()
+    /**
+     * The instant the next operation may start. Atomic because with `concurrency > 1` every
+     * worker thread reserves from this one cursor: each [acquire] must claim its own slot, or
+     * several threads read the same value, wait for the same instant and fire together — the
+     * process then runs at a multiple of the requested rate and the limiter silently stops
+     * limiting. Reserved with a CAS rather than under [lock] so that the waiting happens outside
+     * any lock and the threads genuinely stagger.
+     */
+    private val nextAllowedNanos = AtomicLong(nanoTime())
+
+    /**
+     * Serialises calls into [delegate]. The configured limiters ([ConstantRateLimiter],
+     * [RampedRateLimiter], [SteppedRateLimiter]) each carry their own unguarded cursor, so only
+     * one thread may be inside one at a time. Deliberately **not** [lock]: the delegate sleeps
+     * while holding this, and a [setRate] arriving from the control channel must not queue behind
+     * that sleep.
+     */
+    private val delegateLock = ReentrantLock()
 
     private val lock = ReentrantLock()
     private val rateRaised = lock.newCondition()
@@ -50,7 +68,7 @@ class ControllableRateLimiter(
         lock.lock()
         try {
             overrideTps = opsPerSecond
-            nextAllowedNanos = nanoTime()
+            nextAllowedNanos.set(nanoTime())
             rateRaised.signalAll()
         } finally {
             lock.unlock()
@@ -91,17 +109,32 @@ class ControllableRateLimiter(
     override fun acquire() {
         val rate = overrideTps
         if (rate.isNaN()) {
-            delegate.acquire()
+            delegateLock.lock()
+            try {
+                delegate.acquire()
+            } finally {
+                delegateLock.unlock()
+            }
             return
         }
         if (rate <= 0.0) {
             if (!released) awaitRateChange()
             return
         }
-        val now = nanoTime()
-        val sleep = nextAllowedNanos - now
-        if (sleep > 0) sleeper(sleep)
-        nextAllowedNanos = maxOf(nextAllowedNanos, now) + (1_000_000_000.0 / rate).toLong()
+        val interval = (1_000_000_000.0 / rate).toLong()
+        // Claim a slot, then wait for it outside the CAS. Retrying on a lost race is correct
+        // rather than merely safe: the winner has already moved the cursor past the instant this
+        // caller was about to take, so the right answer is to take the next one.
+        while (true) {
+            val cursor = nextAllowedNanos.get()
+            val now = nanoTime()
+            val deadline = maxOf(cursor, now)
+            if (nextAllowedNanos.compareAndSet(cursor, deadline + interval)) {
+                val sleep = deadline - now
+                if (sleep > 0) sleeper(sleep)
+                return
+            }
+        }
     }
 
     override fun currentTargetTps(): Double {

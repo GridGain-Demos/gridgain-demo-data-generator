@@ -28,13 +28,13 @@ class ScenarioRunnerTest {
         val data = simpleData()
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
-        return ScenarioRunner(scenario = scenario, data = data, generator = gen, target = target)
+        return ScenarioRunner(scenario = scenario, data = data, generators = listOf(gen), target = target)
     }
 
     @Test
     fun `count duration writes exactly N events`(@TempDir dir: Path) {
         val target = InMemoryTarget()
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "count-50",
             rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(opsPerSecond = 1000.0),
@@ -53,7 +53,7 @@ class ScenarioRunnerTest {
     @Test
     fun `time duration runs for at least the configured duration`(@TempDir dir: Path) {
         val target = InMemoryTarget()
-        val scenario = ScenarioSpec(
+        val scenario = ScenarioSpec(concurrency = 1, 
             name = "time-200ms",
             rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(opsPerSecond = 100.0),

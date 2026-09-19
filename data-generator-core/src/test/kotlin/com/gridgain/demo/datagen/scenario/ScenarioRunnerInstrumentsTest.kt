@@ -51,12 +51,12 @@ class ScenarioRunnerInstrumentsTest {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
         return ScenarioRunner(
-            scenario = scenario, data = data, generator = gen, target = target,
+            scenario = scenario, data = data, generators = listOf(gen), target = target,
             instruments = instruments, targetName = targetName,
         )
     }
 
-    private fun scenario(count: Int, readRatio: Double, opsPerSecond: Double = 1000.0) = ScenarioSpec(
+    private fun scenario(count: Int, readRatio: Double, opsPerSecond: Double = 1000.0) = ScenarioSpec(concurrency = 1, 
         name = "instrument-test",
         rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(opsPerSecond),

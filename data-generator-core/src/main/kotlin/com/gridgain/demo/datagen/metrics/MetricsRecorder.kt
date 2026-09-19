@@ -5,10 +5,11 @@ import org.HdrHistogram.ConcurrentHistogram
 import org.HdrHistogram.Histogram
 
 /**
- * Lock-free cumulative counters plus a whole-run latency histogram, fed by the scenario loop (one
- * thread, [record] per op) and read by the [LiveMetricsReporter] (another thread, [counters] and
- * [histogramSnapshot]). The reporter derives per-interval throughput and average latency by diffing
- * successive [counters] reads — see [LiveMetrics.computeSnapshot].
+ * Lock-free cumulative counters plus a whole-run latency histogram, fed by the scenario's worker
+ * threads ([record] per op, one caller per worker — a scenario's `concurrency` sets how many) and
+ * read by the [LiveMetricsReporter] (another thread again, [counters] and [histogramSnapshot]).
+ * The reporter derives per-interval throughput and average latency by diffing successive
+ * [counters] reads — see [LiveMetrics.computeSnapshot].
  *
  * The three counters are read independently, so a snapshot can be off by at most one in-flight op's
  * contribution; over a ~1s interval that skew is immaterial for a live gauge, and lock-free reads

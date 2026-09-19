@@ -74,7 +74,7 @@ class ScenarioRunnerStopSignalTest {
         name: String,
         duration: DurationSpec,
         stopConditions: List<StopConditionSpec> = emptyList(),
-    ) = ScenarioSpec(
+    ) = ScenarioSpec(concurrency = 1, 
         name = name,
         rootSchemas = listOf("customer"),
         // Fast enough that the assertions are about the signal, never about pacing.
@@ -97,7 +97,7 @@ class ScenarioRunnerStopSignalTest {
         val factory = ValueSourceFactory(yamlDataRoot = dir, seed = 1L)
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
         return ScenarioRunner(
-            scenario = scenario, data = data, generator = gen, target = target,
+            scenario = scenario, data = data, generators = listOf(gen), target = target,
             // Long enough that an `until_stop_condition` test that reached it would be a failure,
             // not a slow pass.
             untilStopCap = Duration.ofMinutes(5),
@@ -170,7 +170,7 @@ class ScenarioRunnerStopSignalTest {
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
         // A cap so short that any run still honouring it would stop on the cap, not on the signal.
         val runner = ScenarioRunner(
-            scenario = scenario, data = data, generator = gen, target = target,
+            scenario = scenario, data = data, generators = listOf(gen), target = target,
             untilStopCap = Duration.ZERO, stopSignal = signal,
         )
 
@@ -191,7 +191,7 @@ class ScenarioRunnerStopSignalTest {
         val gen = BusinessEventGenerator(data, "customer", factory, Faker(), cohortSeed = 1L)
         val runner = ScenarioRunner(
             scenario = scenario("capped", UntilStopDurationSpec()),
-            data = data, generator = gen, target = target,
+            data = data, generators = listOf(gen), target = target,
             untilStopCap = Duration.ofMillis(200), stopSignal = signal,
         )
 

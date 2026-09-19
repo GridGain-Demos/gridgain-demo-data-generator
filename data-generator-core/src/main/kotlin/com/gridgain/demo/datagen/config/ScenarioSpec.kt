@@ -28,6 +28,22 @@ data class ScenarioSpec(
     @JsonProperty("transaction_scope") val transactionScope: TransactionScope = TransactionScope.NONE,
     val provisioning: ProvisioningMode = ProvisioningMode.SKIP,
     @JsonProperty("read_ratio") val readRatio: Double,
+    /**
+     * Worker threads one generator process drives (v8+). Each holds one operation in flight, so
+     * this is what decides whether a process can saturate a fast cluster or stays pinned to the
+     * reciprocal of the target's round-trip latency — a single thread against a 200us round trip
+     * tops out near 5,000 ops/s no matter what `rate` asks for.
+     *
+     * `rate` remains the **per-process** target that the workers share, not a per-thread figure.
+     *
+     * Required and without a Kotlin default, per the comprehensive-configuration-file policy:
+     * [MigrateOpsV7toV8] writes `1` into every scenario of an upgraded file, and the JSONSchema
+     * records `1` as the documented default for a UI to pre-fill.
+     *
+     * Every process in a fleet must agree on this value; see
+     * [com.gridgain.demo.datagen.generation.workerStripe].
+     */
+    val concurrency: Int,
     val distribution: DistributionSpec? = null,
 )
 
