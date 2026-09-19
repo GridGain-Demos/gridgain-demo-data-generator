@@ -4,13 +4,32 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.networknt.schema.JsonSchema
+import com.networknt.schema.JsonMetaSchema
 import com.networknt.schema.JsonSchemaFactory
+import com.networknt.schema.NonValidationKeyword
 import com.networknt.schema.SpecVersion
 
 object JsonSchemaValidator {
 
     private val yamlMapper: YAMLMapper = YAMLMapper()
-    private val factory: JsonSchemaFactory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012)
+
+    /**
+     * Ops v9 annotates the element-broker `name` with `x-source-section`, which tells the demo
+     * UI to render it as a picker of configured `message_brokers` names instead of a text box.
+     *
+     * Registered as a non-validating keyword for the same reason the toolkit's own
+     * `ConfigurationParser` registers it: networknt logs a WARN per unknown keyword, and without
+     * this every generator run printed one before doing anything, which reads like a defect in
+     * the operator's file rather than an annotation this validator simply has no opinion about.
+     */
+    private val factory: JsonSchemaFactory =
+        JsonSchemaFactory.builder(JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012))
+            .metaSchema(
+                JsonMetaSchema.builder(JsonMetaSchema.getV202012())
+                    .keyword(NonValidationKeyword("x-source-section"))
+                    .build()
+            )
+            .build()
 
     fun validateData(yamlText: String, fileName: String, version: Int = CURRENT_DATA_SCHEMA_VERSION) {
         validate(
