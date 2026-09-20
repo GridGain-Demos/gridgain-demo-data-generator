@@ -32,6 +32,11 @@ class LiveMetricsReporter(
     private val targetTps: () -> Double,
     private val runGroup: String,
     private val runId: String,
+    /**
+     * This process's worker count and key-space slice. A value, not a supplier, unlike
+     * [targetTps]: the shape is fixed when the run starts and cannot move under it.
+     */
+    private val shape: InstanceShape,
     private val intervalMs: Long = 1_000L,
     private val clockMs: () -> Long = System::currentTimeMillis,
     private val nanoTime: () -> Long = System::nanoTime,
@@ -88,7 +93,7 @@ class LiveMetricsReporter(
             prev = prev, cur = cur, intervalNanos = now - prevNanos,
             runElapsedNanos = now - runStartNanos,
             runLatencyHistogram = HistogramCodec.encode(recorder.histogramSnapshot()),
-            targetTps = targetTps(), runGroup = runGroup, runId = runId,
+            targetTps = targetTps(), runGroup = runGroup, runId = runId, shape = shape,
             nowMs = clockMs(), active = active,
         )
         prev = cur
@@ -110,7 +115,7 @@ class LiveMetricsReporter(
             prev = cur, cur = cur, intervalNanos = 0L,
             runElapsedNanos = now - runStartNanos,
             runLatencyHistogram = HistogramCodec.encode(recorder.histogramSnapshot()),
-            targetTps = 0.0, runGroup = runGroup, runId = runId,
+            targetTps = 0.0, runGroup = runGroup, runId = runId, shape = shape,
             nowMs = clockMs(), active = false,
         )
         runCatching { sink.emit(snapshot) }

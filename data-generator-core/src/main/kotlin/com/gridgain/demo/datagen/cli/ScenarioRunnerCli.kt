@@ -16,10 +16,12 @@ import com.gridgain.demo.datagen.generation.PartitionStripe
 import com.gridgain.demo.datagen.generation.WorkerGenerators
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import com.gridgain.demo.datagen.logging.Slf4jDataGenLogger
+import com.gridgain.demo.datagen.metrics.InstanceShape
 import com.gridgain.demo.datagen.metrics.KafkaMetricsSink
 import com.gridgain.demo.datagen.metrics.LatencyHistogramBounds
 import com.gridgain.demo.datagen.metrics.LiveMetricsReporter
 import com.gridgain.demo.datagen.metrics.MetricsRecorder
+import com.gridgain.demo.datagen.metrics.StripeRef
 import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.observability.LifecycleEvent
 import com.gridgain.demo.datagen.observability.OtelInitializer
@@ -232,7 +234,10 @@ object ScenarioRunnerCli {
         val layout = OutputLayout(parsed.outputDir)
         layout.ensureBaseDirectories()
 
-        val runId = RunId.generate()
+        // The launcher's name for this process when it supplied one, so the UI row, the systemd
+        // unit, the run directory and the Grafana series are all the same string. Generated only
+        // for a standalone run, which has no launcher to ask.
+        val runId = parsed.instanceId ?: RunId.generate()
         val runLog = RunLog(
             runLogFile = layout.runLogFile(runId),
             otelLogger = resolution.openTelemetry.logsBridge.get(Instruments.SCOPE),
@@ -360,6 +365,13 @@ object ScenarioRunnerCli {
                     targetTps = rateLimiter::currentTargetTps,
                     runGroup = parsed.runGroup,
                     runId = runId,
+                    // Constant for this process, and the thing that makes every measured field
+                    // above it interpretable: 40 ops/s from one thread and 40 from thirty-two are
+                    // very different reports.
+                    shape = InstanceShape(
+                        concurrency = resolution.scenario.concurrency,
+                        stripe = partitionStripe?.let { StripeRef(it.partitionId, it.partitionCount) },
+                    ),
                     intervalMs = m.intervalMs,
                 ).also {
                     it.start()

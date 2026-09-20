@@ -17,6 +17,7 @@ import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.metrics.HistogramCodec
+import com.gridgain.demo.datagen.metrics.InstanceShape
 import com.gridgain.demo.datagen.metrics.LatencyHistogramBounds
 import com.gridgain.demo.datagen.metrics.LiveMetricsReporter
 import com.gridgain.demo.datagen.metrics.MetricsRecorder
@@ -222,6 +223,7 @@ class ScenarioRunnerStopSignalTest {
         val reporter = LiveMetricsReporter(
             recorder = recorder, sink = sink, targetTps = { 100_000.0 },
             runGroup = "grp", runId = "run-1",
+            shape = InstanceShape(concurrency = 1, stripe = null),
         )
 
         val result = runner(dir, scenario("counted", CountDurationSpec(1_000_000L)), target, signal, recorder).run()

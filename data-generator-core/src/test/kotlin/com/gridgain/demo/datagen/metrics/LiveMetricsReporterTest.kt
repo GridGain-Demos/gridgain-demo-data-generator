@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
+private val TEST_SHAPE = InstanceShape(concurrency = 1, stripe = null)
+
 class LiveMetricsReporterTest {
 
     private class CapturingSink : MetricsSink {
@@ -22,7 +24,7 @@ class LiveMetricsReporterTest {
         var nanos = 0L
         val reporter = LiveMetricsReporter(
             recorder = recorder, sink = sink, targetTps = { 200.0 },
-            runGroup = "grp-1", runId = "run-1",
+            runGroup = "grp-1", runId = "run-1", shape = TEST_SHAPE,
             clockMs = { 1234L }, nanoTime = { nanos },
         )
 
@@ -47,7 +49,7 @@ class LiveMetricsReporterTest {
         var nanos = 0L
         val reporter = LiveMetricsReporter(
             recorder = recorder, sink = sink, targetTps = { target },
-            runGroup = "g", runId = "r", clockMs = { 0L }, nanoTime = { nanos },
+            runGroup = "g", runId = "r", shape = TEST_SHAPE, clockMs = { 0L }, nanoTime = { nanos },
         )
 
         nanos = 1_000_000_000L
@@ -65,7 +67,7 @@ class LiveMetricsReporterTest {
         val recorder = MetricsRecorder(LatencyHistogramBounds(60_000L, 3))
         val sink = CapturingSink()
         val reporter = LiveMetricsReporter(
-            recorder, sink, targetTps = { 10.0 }, runGroup = "g", runId = "r", clockMs = { 7L },
+            recorder, sink, targetTps = { 10.0 }, runGroup = "g", runId = "r", shape = TEST_SHAPE, clockMs = { 7L },
         )
         recorder.record(1_000_000L, success = false)
 
@@ -87,7 +89,7 @@ class LiveMetricsReporterTest {
         var nanos = 0L
         val reporter = LiveMetricsReporter(
             recorder = recorder, sink = sink, targetTps = { 100.0 },
-            runGroup = "g", runId = "r", clockMs = { 0L }, nanoTime = { nanos },
+            runGroup = "g", runId = "r", shape = TEST_SHAPE, clockMs = { 0L }, nanoTime = { nanos },
         )
 
         repeat(100) { recorder.record(2_000_000L, success = true) } // 100 ops @ 2ms
@@ -116,7 +118,7 @@ class LiveMetricsReporterTest {
         var nanos = 0L
         val reporter = LiveMetricsReporter(
             recorder = recorder, sink = sink, targetTps = { 0.0 },
-            runGroup = "g", runId = "r", clockMs = { 0L }, nanoTime = { nanos },
+            runGroup = "g", runId = "r", shape = TEST_SHAPE, clockMs = { 0L }, nanoTime = { nanos },
         )
         repeat(10) { recorder.record(4_000_000L, success = true) }
 
@@ -135,7 +137,7 @@ class LiveMetricsReporterTest {
         var nanos = 0L
         val reporter = LiveMetricsReporter(
             recorder = recorder, sink = sink, targetTps = { 10.0 },
-            runGroup = "g", runId = "r", clockMs = { 7L }, nanoTime = { nanos },
+            runGroup = "g", runId = "r", shape = TEST_SHAPE, clockMs = { 7L }, nanoTime = { nanos },
         )
         repeat(50) { recorder.record(1_000_000L, success = false) }
 
@@ -158,7 +160,7 @@ class LiveMetricsReporterTest {
         val ex = assertThrows<IllegalArgumentException> {
             LiveMetricsReporter(
                 recorder = MetricsRecorder.detached(), sink = CapturingSink(), targetTps = { 0.0 },
-                runGroup = "g", runId = "r",
+                runGroup = "g", runId = "r", shape = TEST_SHAPE,
             )
         }
         assertTrue(ex.message!!.contains("metrics:"))

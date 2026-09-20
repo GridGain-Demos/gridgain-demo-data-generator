@@ -65,6 +65,18 @@ data class CliArgs(
      * path wants to name the path.
      */
     val brokerEndpoints: BrokerEndpointsSource = BrokerEndpointsSource.Absent,
+    /**
+     * This process's identity, as its launcher already knows it — the systemd instance name on
+     * hosts, the pod name in Kubernetes.
+     *
+     * Optional, and null means "mint one" ([com.gridgain.demo.datagen.runtime.RunId]). It exists
+     * because the launcher and the process used to name the same thing differently: the toolkit
+     * called a process `<run>-i3` and used that for its unit, its run directory and its run.log,
+     * while the process reported an unrelated generated id on the metrics feed — which is the one
+     * the demo UI displays. An operator looking at a slow instance on that page had no way to
+     * reach its logs. Supplying the launcher's name here makes all of them one string.
+     */
+    val instanceId: String? = null,
 )
 
 private val REQUIRED_FLAGS = listOf(
@@ -78,8 +90,12 @@ internal const val INSTANCE_COUNT_FLAG = "--instance-count"
 /** Carries [CliArgs.brokerEndpoints]. See that field for why it is optional. */
 internal const val BROKER_ENDPOINTS_FLAG = "--broker-endpoints"
 
+/** Carries [CliArgs.instanceId]. See that field for why a launcher should supply it. */
+internal const val INSTANCE_ID_FLAG = "--instance-id"
+
 private const val OPTIONAL_FLAGS_SUFFIX =
     "optional: --otel-endpoint-override <url>, $BROKER_ENDPOINTS_FLAG <path>, " +
+        "$INSTANCE_ID_FLAG <id>, " +
         "$INSTANCE_INDEX_FLAG <i> $INSTANCE_COUNT_FLAG <n> (both or neither)."
 
 fun parseArgs(args: Array<String>): CliArgs {
@@ -108,6 +124,9 @@ fun parseArgs(args: Array<String>): CliArgs {
         targetCluster = required(map, "--target-cluster"),
         otelEndpointOverride = map["--otel-endpoint-override"]?.takeIf { it.isNotBlank() },
         instanceStripe = parseInstanceStripe(map),
+        // Blank is absent, not an empty identity: systemd renders an unset variable as an empty
+        // word, and an id of "" would key every such process under the same empty string.
+        instanceId = map[INSTANCE_ID_FLAG]?.takeIf { it.isNotBlank() },
         brokerEndpoints = map[BROKER_ENDPOINTS_FLAG]?.takeIf { it.isNotBlank() }
             ?.let { BrokerEndpointsSource.At(Paths.get(it)) }
             ?: BrokerEndpointsSource.Absent,
@@ -182,8 +201,12 @@ private fun required(map: Map<String, String>, flag: String): String {
         throw MisconfigurationException(
             "required command-line flag '$flag' is missing or empty. " +
                 "Missing flags: ${missing.joinToString(", ")}. " +
+                // The same optional list the other message uses. It was a second hand-maintained
+                // copy until 2026-09-20 and had already drifted — it never learned
+                // --broker-endpoints — so an operator reading this one was told a flag did not
+                // exist.
                 "Expected invocation: " + REQUIRED_FLAGS.joinToString(" ") { "$it <value>" } +
-                " [--otel-endpoint-override <url>] [$INSTANCE_INDEX_FLAG <i> $INSTANCE_COUNT_FLAG <n>]."
+                "; " + OPTIONAL_FLAGS_SUFFIX
         )
     }
     return value

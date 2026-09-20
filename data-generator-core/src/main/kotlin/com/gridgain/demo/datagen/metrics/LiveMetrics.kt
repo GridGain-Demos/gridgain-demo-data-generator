@@ -16,6 +16,8 @@ object LiveMetrics {
         targetTps: Double,
         runGroup: String,
         runId: String,
+        /** Constant for the process; passed through unchanged, like [runGroup] and [runId]. */
+        shape: InstanceShape,
         nowMs: Long,
         active: Boolean,
     ): MetricsSnapshot {
@@ -42,6 +44,7 @@ object LiveMetrics {
             runGroup = runGroup,
             runId = runId,
             active = active,
+            shape = shape,
         )
     }
 }

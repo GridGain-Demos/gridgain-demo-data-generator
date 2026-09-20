@@ -137,3 +137,56 @@ class CliArgsTest {
         return list.toTypedArray()
     }
 }
+
+/**
+ * `--instance-id` exists to collapse two ids that were never connected.
+ *
+ * The toolkit names a generator process — its systemd unit instance, its run directory, its
+ * run.log — and the process then minted an unrelated `RunId` of its own, which is what reached the
+ * metrics feed and therefore the demo UI. So the instance a user saw running slowly on the Load
+ * page could not be found on a machine, in a log, or in Grafana: three different names for one
+ * process, with no mapping between them anywhere.
+ *
+ * Optional, because a standalone run has no launcher to supply one and `RunId.generate()` remains
+ * the right answer there.
+ */
+class InstanceIdArgTest {
+
+    private fun baseArgs(vararg extra: String) = arrayOf(
+        "--data", "d.yaml", "--ops", "o.yaml", "--scenario", "s",
+        "--cluster-endpoints", "e.yaml", "--output", "out",
+        "--run-group", "grp", "--target-cluster", "c",
+        *extra,
+    )
+
+    @kotlin.test.Test
+    fun `an instance id is carried when supplied`() {
+        val parsed = parseArgs(baseArgs("--instance-id", "run-42-i3"))
+
+        kotlin.test.assertEquals("run-42-i3", parsed.instanceId)
+    }
+
+    @kotlin.test.Test
+    fun `it is absent by default, leaving the process to mint its own`() {
+        kotlin.test.assertNull(parseArgs(baseArgs()).instanceId)
+    }
+
+    @kotlin.test.Test
+    fun `a blank value is treated as absent rather than as an empty identity`() {
+        // systemd renders an unset variable as an empty word; an id of "" would key a live
+        // instance under the empty string and collide with every other such process.
+        kotlin.test.assertNull(parseArgs(baseArgs("--instance-id", "  ")).instanceId)
+    }
+
+    @kotlin.test.Test
+    fun `the flag is listed in the invocation help, so a missing required flag names it too`() {
+        val message = kotlin.test.assertFailsWith<com.gridgain.demo.datagen.errors.MisconfigurationException> {
+            parseArgs(arrayOf("--data", "d.yaml"))
+        }.message!!
+
+        kotlin.test.assertTrue(
+            message.contains("--instance-id"),
+            "the optional-flag list is the only place an operator learns this exists; got: $message",
+        )
+    }
+}

@@ -20,6 +20,13 @@ package com.gridgain.demo.datagen.metrics
  * makes an end-of-run summary defensible. [totalOps] and [errorCount] were already lifetime
  * cumulative and are unchanged.
  *
+ * ### Shape: what produced these numbers
+ * [shape] reports how many worker threads this process runs and which slice of the key space it
+ * owns. Without it a consumer cannot tell 40 ops/s from one thread apart from 40 ops/s from
+ * thirty-two, and cannot compute a throughput ceiling at all — the demo UI guessed at one for as
+ * long as the field was absent, on an assumption (one operation in flight per instance) that
+ * stopped being true when ops v8 introduced `concurrency`.
+ *
  * ### Identity: two ids, deliberately
  * [runId] identifies **this process**; every instance of a distributed run generates its own. That
  * is what lets a consumer count live instances and evict one that died. [runGroup] is the id shared
@@ -54,4 +61,44 @@ data class MetricsSnapshot(
     val runId: String,
     /** False in the final snapshot written at run end, so consumers zero out between runs. */
     val active: Boolean,
+    /** How this process is configured to generate load. See [InstanceShape]. */
+    val shape: InstanceShape,
 )
+
+/**
+ * The configured shape of one generator process: its worker-thread count and its key-space slice.
+ *
+ * Constant for the process's lifetime — unlike every other field on [MetricsSnapshot], which is
+ * measured. It rides on the snapshot anyway because the snapshot is the only channel a consumer
+ * has to this process, and because a measurement is uninterpretable without it.
+ *
+ * ### Why a nested object rather than two fields on the snapshot
+ * A consumer reading a snapshot from a generator built before this existed must be able to tell.
+ * Jackson fails on a missing **reference** type, which is that signal; it silently supplies 0 for
+ * a missing JVM **primitive**. Flat `concurrency`/`stripeIndex` ints would therefore arrive as
+ * zeroes indistinguishable from real values, and a ceiling computed from "concurrency 0" would be
+ * wrong rather than absent. Nesting the primitives inside a reference type means they can only be
+ * read when the object they live in was actually sent.
+ */
+data class InstanceShape(
+    /** Worker threads in this process — the scenario's `concurrency`. At least 1. */
+    val concurrency: Int,
+    /**
+     * The slice of the key space this process owns, or null when it owns all of it.
+     *
+     * Nullable to mirror `PartitionStripe?` itself, which is null rather than an identity
+     * `(0, 1)` precisely so that nothing announces striping that is not happening.
+     */
+    val stripe: StripeRef?,
+)
+
+/**
+ * One process's key-space slice, as `index` of `count`.
+ *
+ * The wire form of `PartitionStripe`, duplicated rather than shared because that type lives in
+ * `generation` alongside the value sources and carries `require` checks meaningful only while
+ * generating. Here it is a report, and a consumer's job is to notice when a fleet's slices do not
+ * tile — two processes claiming the same index write the same primary keys, which GridGain accepts
+ * silently.
+ */
+data class StripeRef(val index: Int, val count: Int)
