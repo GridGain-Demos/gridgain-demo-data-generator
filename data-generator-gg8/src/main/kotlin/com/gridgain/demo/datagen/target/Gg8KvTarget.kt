@@ -6,6 +6,7 @@ import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.target.TransactionOutcome
 import com.gridgain.demo.client.gg8.DemoAddressFinder
 import org.apache.ignite.Ignition
+import org.apache.ignite.client.ClientCache
 import org.apache.ignite.client.IgniteClient
 import org.apache.ignite.configuration.ClientConfiguration
 import java.net.InetSocketAddress
@@ -33,6 +34,21 @@ class Gg8KvTarget(
     override val supportsTransactions: Boolean = true
 
     @Volatile private var client: IgniteClient? = null
+
+    /**
+     * One cache handle per schema, not one per operation.
+     *
+     * `getOrCreateCache` on a thin client is a remote cache-lifecycle round trip, and it used to
+     * sit inside both [putRow] and [read] — so every generator operation paid for it, inside the
+     * very section the generator times and reports as its latency. Measured cost on the Power lab
+     * 2026-09-20 at 64 concurrent operations: 166k ops/s became 95k. See [CacheHandles].
+     *
+     * Resolved lazily against whatever client [ensureClient] has opened, and cleared by [close]
+     * because a handle outlives neither its client nor its usefulness.
+     */
+    private val caches = CacheHandles<ClientCache<Any, Map<String, Any?>>> { schemaName ->
+        ensureClient().getOrCreateCache(schemaName)
+    }
 
     /** Cached fatal connection failure — once we've decided the cluster is unreachable, every
      *  subsequent ensureClient call rethrows immediately instead of reprobing. Without this,
@@ -109,27 +125,24 @@ class Gg8KvTarget(
                 "no key column registered for parent schema '${event.parentSchemaName}'; " +
                 "registered: ${keyColumnByName.keys}"
             )
-        putRow(ignite, event.parentSchemaName, parentKeyColumn, event.parentRow)
+        putRow(event.parentSchemaName, parentKeyColumn, event.parentRow)
         event.childrenBySchema.forEach { (childSchema, rows) ->
             val childKeyColumn = keyColumnByName[childSchema]
                 ?: throw IllegalStateException("no key column registered for schema '$childSchema'")
-            rows.forEach { row -> putRow(ignite, childSchema, childKeyColumn, row) }
+            rows.forEach { row -> putRow(childSchema, childKeyColumn, row) }
         }
     }
 
-    private fun putRow(ignite: IgniteClient, schemaName: String, keyColumn: String, row: Map<String, Any?>) {
+    private fun putRow(schemaName: String, keyColumn: String, row: Map<String, Any?>) {
         val key = row[keyColumn] ?: throw IllegalStateException(
             "row of schema '$schemaName' has null value in key column '$keyColumn'."
         )
-        val cache = ignite.getOrCreateCache<Any, Map<String, Any?>>(schemaName)
-        cache.put(key, row)
+        caches[schemaName].put(key, row)
     }
 
     override fun read(cacheName: String, key: Any): ReadOutcome {
         return try {
-            val ignite = ensureClient()
-            val cache = ignite.getOrCreateCache<Any, Map<String, Any?>>(cacheName)
-            val value = cache.get(key)
+            val value = caches[cacheName].get(key)
             ReadOutcome(success = true, value = value)
         } catch (e: Exception) {
             ReadOutcome(success = false, error = e)
@@ -137,6 +150,9 @@ class Gg8KvTarget(
     }
 
     override fun close() {
+        // Handles first: they are bound to this client, and a later one must not be given a cache
+        // that belongs to a closed connection.
+        caches.clear()
         client?.close()
         client = null
     }

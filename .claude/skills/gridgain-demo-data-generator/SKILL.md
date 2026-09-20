@@ -240,6 +240,34 @@ Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-
 
 **Why the cluster is a flag and not a config field.** The same load shape is routinely run against different clusters, and a scenario that named one made the whole ops file specific to a single demo. As a flag it is also checked before any load is generated: each `*Main` resolves the cluster up front and fails with a `MisconfigurationException` naming `--target-cluster` if the name is unknown or belongs to the other GridGain major version. That eager check matters — the resolution failure surfaces from inside the write path, where it is counted as an op error and discarded, so without it an unresolvable cluster produces a full-length run reporting zero successes and **exit code 0**.
 
+## Throughput: resolve cache handles once
+
+`Gg8KvTarget` used to call `IgniteClient.getOrCreateCache(name)` inside every `putRow` and every
+`read`. On a **thin client that is a remote cache-lifecycle round trip**, not a local lookup, and
+it sat inside the section each operation times and reports as its latency. Fixed 2026-09-20
+(`CacheHandles`, one handle per schema, cleared when the client closes).
+
+Measured on two Power11 LPARs, 2 generator processes, before -> after:
+
+| threads/process | before | after |
+|---|---|---|
+| 8 | 51,301 ops/s @ 0.302 ms | 73,834 @ 0.198 ms |
+| 16 | **70 @ 455 ms** | 122,481 @ 0.217 ms |
+| 32 | **87 @ 732 ms** | 153,848 @ 0.259 ms |
+
+Two lessons worth keeping. **Concurrency did not scale at all before it** — past ~16 operations in
+flight throughput collapsed ~1,700x with both machines and the network idle, which reads exactly
+like a cluster or network fault and is neither. And a standalone probe doing per-op
+`getOrCreateCache` against a *single* cache showed only a 40% tax, not the collapse: the collapse
+needs the generator's real shape, several schemas and several rows per event. **Do not model this
+workload with one cache and one operation per iteration.**
+
+⚠️ **Affinity awareness is still off.** In `ignite-core` 8.9.18 the setter is
+`ClientConfiguration.setAffinityAwarenessEnabled(boolean)` (not `setPartitionAwarenessEnabled`,
+which does not exist there) and it defaults to false, so every request from a process goes to one
+node over one connection and the rest of the cluster is idle. Routing is the GridGain client's
+job, not the generator's — this is one flag.
+
 ## Sources of truth (verify here when exact)
 
 This repo's own `CLAUDE.md` (§Key files) is the canonical file map — defer to it. References below
