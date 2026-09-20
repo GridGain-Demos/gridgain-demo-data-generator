@@ -79,6 +79,16 @@ class Gg8KvTarget(
             val cfg = ClientConfiguration()
                 .setAddressesFinder(finder)
                 .setTimeout(CONNECT_TIMEOUT_MS)
+                // Off by default in this client, which meant every operation from a process went
+                // to whichever node it happened to connect to — `applyOnDefaultChannel` — and that
+                // node proxied on to whichever one actually owns the key. One server took all the
+                // client traffic and the rest of the cluster only ever saw forwarded work. With
+                // this on, the client opens a channel per server and sends each key to its primary.
+                //
+                // Named `setAffinityAwarenessEnabled` in ignite-core 8.9.x; later versions renamed
+                // it to partition awareness and turned it on by default. Routing is the GridGain
+                // client's job either way — this is the flag, not logic the generator implements.
+                .setAffinityAwarenessEnabled(true)
             val opened = try {
                 Ignition.startClient(cfg)
             } catch (e: Exception) {

@@ -31,7 +31,11 @@ object ProvisioningPlanFactory {
                     isAffinity = col.affinity,
                 )
             }
-            SchemaDescriptor(schema.name, keyColumn, affinityColumn, cols, transactional)
+            SchemaDescriptor(
+                schema.name, keyColumn, affinityColumn, cols, transactional,
+                backups = schema.backups,
+                writeSynchronizationMode = schema.writeSynchronizationMode,
+            )
         }
         return ProvisioningPlan(descriptors)
     }

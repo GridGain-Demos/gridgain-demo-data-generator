@@ -11,6 +11,22 @@ data class SchemaSpec(
     val name: String,
     @JsonProperty("update_ratio") val updateRatio: Double,
     val columns: List<ColumnSpec>,
+    /**
+     * Copies of each row beyond the primary. `0` is one copy and no redundancy.
+     *
+     * `MigrateV2toV3` writes `0` into every older schema — which is what those caches already
+     * had — so a real data.yaml states it explicitly. The default here exists for the same
+     * documented reason as [ColumnSpec.affinity]: it keeps every fixture and every hand-written
+     * pre-v3 file constructing, and it is the value those files already behaved as. Only
+     * consumed when the scenario provisions the cache
+     * (`provisioning: emit|apply`) — a cache that already exists keeps the configuration it was
+     * created with, and GG8 rejects `getOrCreateCache` with a conflicting one.
+     */
+    val backups: Int = 0,
+    /** See [WriteSyncMode]. The migration writes it into older files; defaulted for the same
+     *  reason as [backups]. */
+    @JsonProperty("write_synchronization_mode")
+    val writeSynchronizationMode: WriteSyncMode = WriteSyncMode.PRIMARY_SYNC,
 )
 
 /**

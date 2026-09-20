@@ -36,7 +36,9 @@ class Gg8CacheXmlRenderer {
                                        http://www.springframework.org/schema/beans/spring-beans.xsd">
                 <bean class="org.apache.ignite.configuration.CacheConfiguration">
                     <property name="name" value="${d.schemaName}"/>
-                    <property name="atomicityMode" value="$mode"/>$affinityBlock
+                    <property name="atomicityMode" value="$mode"/>
+                    <property name="backups" value="${d.backups}"/>
+                    <property name="writeSynchronizationMode" value="${d.writeSynchronizationMode.name}"/>$affinityBlock
                 </bean>
             </beans>
         """.trimIndent()

@@ -2,9 +2,6 @@ package com.gridgain.demo.datagen.provisioning
 
 import com.gridgain.demo.client.gg8.DemoAddressFinder
 import org.apache.ignite.Ignition
-import org.apache.ignite.cache.CacheAtomicityMode
-import org.apache.ignite.cache.CacheKeyConfiguration
-import org.apache.ignite.client.ClientCacheConfiguration
 import org.apache.ignite.client.IgniteClient
 import org.apache.ignite.configuration.ClientConfiguration
 import java.net.InetSocketAddress
@@ -61,19 +58,17 @@ class Gg8XmlProvisioner(
             for (d in plan.descriptors) {
                 val alreadyExists = d.schemaName in existing
                 try {
-                    val cacheCfg = ClientCacheConfiguration().apply {
-                        setName(d.schemaName)
-                        setAtomicityMode(if (d.transactional) CacheAtomicityMode.TRANSACTIONAL else CacheAtomicityMode.ATOMIC)
-                        d.affinityColumn?.let { setKeyConfiguration(CacheKeyConfiguration("java.lang.Object", it)) }
-                    }
-                    ignite.getOrCreateCache<Any, Any>(cacheCfg)
+                    ignite.getOrCreateCache<Any, Any>(Gg8CacheConfig.forDescriptor(d))
                     if (alreadyExists) existed.add(d.schemaName) else created.add(d.schemaName)
                 } catch (e: Exception) {
                     errors.add(
                         "Gg8XmlProvisioner.apply failed for cache '${d.schemaName}': ${e.message}. " +
-                        "If the cache already exists with a different config (atomicityMode, affinityKey, or " +
-                        "backups), GG8's getOrCreateCache rejects the call. Either tear down the cache and re-run, " +
-                        "or align data.yaml to the existing cache's config."
+                        "If the cache already exists with a different config (atomicityMode, affinityKey, " +
+                        "backups or writeSynchronizationMode), GG8's getOrCreateCache rejects the call. " +
+                        "Changing `backups` or `write_synchronization_mode` in data.yaml for a cache that " +
+                        "already exists therefore needs the cache destroyed first — it cannot be altered in " +
+                        "place. Either tear down the cache and re-run, or align data.yaml to the existing " +
+                        "cache's config."
                     )
                 }
             }

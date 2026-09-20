@@ -5,7 +5,7 @@ description: How to USE the GridGain demo data generator — authoring ops.yaml/
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-09-19*
+*Last updated: 2026-09-20*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -16,7 +16,7 @@ A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **
 | File | Purpose | Current schema_version |
 |------|---------|------------------------|
 | `ops.yaml` | scenarios (rate/duration/scope/concurrency), metrics, control, otel | **9** |
-| `data.yaml` | schemas → columns → value sources, FK relations | **2** |
+| `data.yaml` | schemas → columns → value sources, FK relations, **replication** | **3** |
 
 Both carry a `schema_version` and are **auto-migrated** forward before validation (`OpsConfigMigrationRunner`, `DataConfigMigrationRunner`). Validation failures are fatal with remediation text.
 
@@ -239,6 +239,31 @@ Launched via the generator's own CLI (entry points under `data-generator-gg8`/`-
 - **`--instance-index <i> --instance-count <n>`** — **the key-space stripe for a multi-process run.** `n` is how many generator processes share the key space; `i` is the 0-based slice this one owns, and every `sequence` value source then strides by `n * step` from `start + i * step`. **Both or neither**, validated together: one without the other is refused naming both, as are a non-integer value, a count below 1, and an index outside `0..n-1`. Absent → this process owns the whole key space, exactly today's behaviour. **Refused** when the coordinator has already supplied a stripe (Kubernetes distributed mode) rather than one silently winning. **A multi-process host or local load test needs these** — see gotcha 11 for what happens without them, and note nothing checks that a fleet used each index exactly once.
 
 **Why the cluster is a flag and not a config field.** The same load shape is routinely run against different clusters, and a scenario that named one made the whole ops file specific to a single demo. As a flag it is also checked before any load is generated: each `*Main` resolves the cluster up front and fails with a `MisconfigurationException` naming `--target-cluster` if the name is unknown or belongs to the other GridGain major version. That eager check matters — the resolution failure surfaces from inside the write path, where it is counted as an op error and discarded, so without it an unresolvable cluster produces a full-length run reporting zero successes and **exit code 0**.
+
+## Replication (`backups`, `write_synchronization_mode`) — data v3
+
+Per schema, and **only applied when the generator creates the cache** (`provisioning: emit|apply`):
+
+```yaml
+schemas:
+  - name: customer
+    backups: 1                            # copies beyond the primary; 0 = one copy, no redundancy
+    write_synchronization_mode: full_sync # primary_sync | full_sync | full_async
+```
+
+- **`backups` alone does not make a put wait for its replica.** The default `primary_sync` returns
+  as soon as the primary holds the row, so replication happens behind the call and none of its cost
+  appears in the latency on the dashboard. `full_sync` is what makes the measurement mean what a
+  reader assumes.
+- **Reads stay local.** `readFromBackup` is GridGain's default (true) and is not exposed here: with
+  `backups: 1` on two nodes every node holds every partition, so a read is answered wherever it
+  lands. Measured on the Power lab: `put` 0.603 ms, `get` 0.229 ms — the asymmetry is the point.
+- ⚠️ **A cache cannot be re-configured in place.** GG8 rejects `getOrCreateCache` against an
+  existing cache with a different `backups`/`writeSynchronizationMode`/atomicity, so changing
+  either value means **destroying the cache first**
+  (`control.sh --host <bind-addr> --port 11211 --cache destroy --caches <name> --yes`; note
+  `--host`, the connector binds the machine address, not loopback). `MigrateV2toV3` writes
+  `backups: 0` / `primary_sync` into every pre-v3 schema, so upgrading changes nothing by itself.
 
 ## Throughput: resolve cache handles once
 

@@ -235,7 +235,7 @@ class ConfigurationParserTest {
         }
         val parser = ConfigurationParser(logger = logger, crossElementValidator = warner)
         val parsed = parser.parse(dataFile = data.toFile(), opsFile = ops.toFile())
-        assertThat(parsed.data.schemaVersion).isEqualTo(2)
+        assertThat(parsed.data.schemaVersion).isEqualTo(CURRENT_DATA_SCHEMA_VERSION)
     }
 
     @Test
