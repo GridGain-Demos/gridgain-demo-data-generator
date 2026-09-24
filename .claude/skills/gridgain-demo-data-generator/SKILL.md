@@ -5,7 +5,7 @@ description: How to USE the GridGain demo data generator — authoring ops.yaml/
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-09-20*
+*Last updated: 2026-09-24*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -228,6 +228,20 @@ schemas:
     applied to a value recorded in nanoseconds), so any workload slower than 10 µs lands entirely in
     `+Inf` and `histogram_quantile` returns nothing meaningful. Percentiles come from
     `runLatencyHistogram` on the Kafka feed — see §Metrics, and remember it is in **microseconds**.
+
+20. **A missing CLI argument surfaces as a raw stacktrace**, not a usage message:
+    `NoSuchElementException: Key --data is missing in the map` at `CliArgs.kt:33`. It names neither
+    the option that was expected nor the caller, which is disproportionately confusing when the
+    caller is a systemd unit's `ExecStart` or a k8s manifest rather than a shell you can retry in.
+
+21. **`provisioning: apply` creates GG8 caches with statistics ENABLED, and pre-existing caches keep
+    whatever they had.** GridGain defaults cache statistics off, which leaves `CachePuts`/`CacheGets`
+    — and every monitoring panel reading them — blank however hard the generator drives the cluster.
+    Nothing errors and the load is real, so the symptom is an empty graph that reads as a broken
+    generator. `Gg8CacheConfig` now sets it. ⚠️ **This only applies at cache CREATION**, like
+    `backups` and `write_synchronization_mode`: a cache created before this change, or by anything
+    other than the generator, still has statistics off. Destroy it and let provisioning recreate it,
+    or toggle statistics at runtime through the cluster API.
 
 
 ## Metrics

@@ -71,6 +71,20 @@ class Gg8CacheConfigTest {
     }
 
     @Test
+    fun `statistics are enabled, whatever else the schema asks for`() {
+        // GridGain caches default statistics OFF, and CachePuts/CacheGets — with every monitoring
+        // dashboard panel that reads them — stay blank under heavy generated load as a result.
+        // Nothing errors, so the only symptom is an empty graph.
+        WriteSyncMode.entries.forEach { mode ->
+            assertThat(Gg8CacheConfig.forDescriptor(descriptor(mode = mode)).isStatisticsEnabled)
+                .describedAs("statistics must not depend on the replication settings")
+                .isTrue()
+        }
+        assertThat(Gg8CacheConfig.forDescriptor(descriptor(transactional = true)).isStatisticsEnabled)
+            .isTrue()
+    }
+
+    @Test
     fun `the transactional and affinity choices are still carried`() {
         val cfg = Gg8CacheConfig.forDescriptor(
             descriptor(transactional = true, affinityColumn = "customer_id")

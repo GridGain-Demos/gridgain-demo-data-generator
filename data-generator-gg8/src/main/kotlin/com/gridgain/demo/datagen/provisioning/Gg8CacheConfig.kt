@@ -28,6 +28,14 @@ internal object Gg8CacheConfig {
             )
             setBackups(d.backups)
             setWriteSynchronizationMode(writeSyncOf(d.writeSynchronizationMode))
+            // GridGain caches default statistics OFF, which leaves the cluster's cache-ops metrics
+            // (CachePuts, CacheGets) — and every dashboard panel that reads them — blank however
+            // hard the generator drives the cluster. Nothing errors and the load is real, so the
+            // only symptom is an empty graph, which reads as "the generator is not working".
+            //
+            // Unconditional rather than configurable: this is a demo generator whose caches exist
+            // to be watched, and per-cache statistics cost is negligible next to the write path.
+            setStatisticsEnabled(true)
             d.affinityColumn?.let { setKeyConfiguration(CacheKeyConfiguration("java.lang.Object", it)) }
         }
 
