@@ -137,10 +137,14 @@ a working demo that happens to report nothing.
 ## data.yaml
 
 ```yaml
-schema_version: 2
+schema_version: 3            # current; a v1/v2 file is migrated forward automatically
 schemas:
   - name: customer            # maps 1:1 to a GG cache/table name (see gotcha)
-    update_ratio: 0.05        # fraction of writes that update existing keys vs insert
+    update_ratio: 0.05        # fraction of WRITES that reuse an existing key vs insert a new one.
+                              # NOT a read/write mix — that is read_ratio in ops.yaml. At any value
+                              # every operation this controls is still a put.
+    backups: 1                 # required from v3
+    write_synchronization_mode: full_sync   # required from v3
     columns:
       - name: id
         key: true             # exactly one key column per schema
@@ -191,6 +195,39 @@ schemas:
 14. **Mixed `concurrency` across a fleet writes duplicate primary keys.** Each worker's key-space stripe is derived from `concurrency`, so processes that disagree on it produce stripes of different widths that overlap. Symptom is silent overwrites, not an error. Launch every instance of a run from the same ops.yaml.
 
 15. **ops `schema_version: 9` invalidates every deployed generator archive, like v7 and v8 did.** v9 replaces `metrics.kafka_bootstrap` / `control.kafka_bootstrap` with a required `broker:` reference (§Broker references). A pre-v9 archive refuses a v9 file outright ("only supports up to schema_version 8"), so **every installed archive and image must be rebuilt and redeployed in the same pass** as the ops file. ⚠️ **Unlike 7→8, hand-bumping `schema_version` is NOT equivalent to running the migration.** `MigrateOpsV8toV9` performs a real rewrite — `kafka_bootstrap: X` → `broker: { kind: address, bootstrap_servers: X }` — so a hand-bumped file also needs those two keys rewritten by hand, or the v9 JSONSchema rejects it for a missing `broker`. (Hand-editing is still the right move for a heavily-commented ops.yaml: the migration rewrites through SnakeYAML and drops every comment.) The migration deliberately **never invents an element name** from an address — only a deployment knows that `10.0.0.5:9092` is `payments-bus` — so switching a channel to the reference form is always a manual, considered edit.
+
+16. **`read_ratio: 1.0` still writes once on a cold start.** The read branch is gated on
+    `keyRegistry.size(rootSchema) > 0` (`ScenarioRunner.kt:227-228`) — with an empty registry the
+    first tick falls through to a write, which registers a key, and every tick after it reads. With
+    N worker threads racing, up to N writes can slip through before the registry is seen as
+    populated. **For a genuinely zero-write run, start from a `state.yaml` written by an earlier
+    load run**: `ScenarioRunnerCli` restores the registry before the first tick, so `size > 0` holds
+    immediately. Note also that reads only ever target `rootSchemas.first()` and sample keys
+    uniformly — there is no hot-key or Zipfian option.
+
+17. **Prefer more PROCESSES over more threads when driving a throughput test.**
+    `ControllableRateLimiter.acquire()` takes a **process-wide `ReentrantLock`** on every operation,
+    and on the normal (no live override) path it holds that lock across the delegate's
+    `Thread.sleep` (`ControllableRateLimiter.kt:109-118` + `RateLimiter.kt:22`). Threads in one
+    process therefore serialise on it, and the contention is invisible in the results — it shows up
+    as in-flight operations falling short of `concurrency`, not as an error. Measured on the Power
+    lab: 128 threads in **2** processes held only ~50 operations in flight; the same 128 threads in
+    **4** processes held 112, and throughput rose 29%. The lock is per process, so splitting the
+    same thread count across more processes splits the contention.
+
+18. **One thin-client connection per server node, per process.** `Gg8KvTarget` builds its
+    `ClientConfiguration` with only `setAddressesFinder`, `setTimeout` and
+    `setAffinityAwarenessEnabled` — **`setConnectionsPerServer` is never called**, so the default
+    applies and every worker thread in a process multiplexes onto one socket per server node. The
+    protocol pipelines, so this is not a hard cap on in-flight requests, but it is a shared write
+    path and another reason process count matters more than it looks.
+
+19. **Do not try to read percentiles out of Prometheus.** The OTel instrument exports
+    `data_generator_op_latency_nanoseconds_bucket`, which *looks* like a usable histogram and is
+    not: its largest finite bucket is **0.01 ms** (OTel's default millisecond-scale boundaries
+    applied to a value recorded in nanoseconds), so any workload slower than 10 µs lands entirely in
+    `+Inf` and `histogram_quantile` returns nothing meaningful. Percentiles come from
+    `runLatencyHistogram` on the Kafka feed — see §Metrics, and remember it is in **microseconds**.
 
 
 ## Metrics
@@ -264,6 +301,51 @@ schemas:
   (`control.sh --host <bind-addr> --port 11211 --cache destroy --caches <name> --yes`; note
   `--host`, the connector binds the machine address, not loopback). `MigrateV2toV3` writes
   `backups: 0` / `primary_sync` into every pre-v3 schema, so upgrading changes nothing by itself.
+
+## GridGain 9 (`Gg9Main`, `data-generator-gg9`)
+
+Same two config files, same scenarios, same CLI. A separate archive rather than a flag, because the
+GG8 and GG9 thin clients pull incompatible Ignite runtimes — the toolkit refuses to point a
+generator at a cluster of the other major version, comparing the archive's
+`gridgain_major_version` against the target cluster's.
+
+**`ops.yaml` is already version-neutral.** Its v7 migration removed the `targets:` block, so the
+cluster arrives as `--target-cluster` at launch and nothing in the file names a GridGain version.
+The same ops file drives either flavour unchanged, which is what makes a like-for-like comparison
+possible at all.
+
+**`data.yaml` is not, and the difference is silent.** GG9 provisions with SQL rather than cache
+configuration — `Gg9SqlDdlRenderer` emits one `CREATE ZONE` plus a `CREATE TABLE` per schema — so:
+
+| data.yaml key | GG8 | GG9 |
+|---|---|---|
+| `backups` | cache `backups` | **ignored**; replication is a zone property |
+| `write_synchronization_mode` | cache `writeSynchronizationMode` | **ignored**; no equivalent |
+| `columns[].key` | cache key field | `PRIMARY KEY` |
+| `columns[].affinity` | affinity key | appended to the PK, plus `COLOCATE BY` |
+
+⚠️ **So the two flavours are not replica-for-replica equivalent on the same `data.yaml`.** GG8 with
+`backups: 1` + `full_sync` holds two copies and makes the put wait for the second; the rendered GG9
+zone carries **no `REPLICAS`** and takes the default of one copy, with no replica to wait for. A
+throughput comparison across flavours must say so, or it is reporting the cost of replication as if
+it were the difference between versions.
+
+⚠️ **The rendered DDL hard-codes `STORAGE_PROFILES = 'default'`.** That is a *coupling to the
+cluster's own configuration*: the profile named there must exist in the node's `ignite.storage.profiles`.
+The toolkit's host GG9 template renders exactly one profile called `default`, so they agree — but a
+hand-edited cluster configuration that renames it makes provisioning fail at `CREATE ZONE`, and the
+error names the zone rather than the profile.
+
+**No `--add-opens` in the GG9 launcher**, unlike GG8's: the GG9 thin client does not reflect on
+`java.nio` internals. Gotcha 18's note about `setConnectionsPerServer` applies to `Gg8KvTarget`;
+`Gg9KvTarget` builds its client from `DemoAddressFinder` the same way and likewise never sets it.
+
+**Measured on the Power lab, 2026-09-23** — 2 processes x 64 threads on one LPAR against a two-node
+GG9 cluster: **37,340 ops/s at 1.80 ms mean, 128 in flight, zero errors**. ⚠️ Not comparable with
+the GG8 figures in the same lab: that cluster was uncapped at 64 vCPU/node with persistence off and
+a 32 GiB region, while this one is CPU-capped to 32/node by its licence, uses `aipersist`, and has
+an 8 GiB region — and the replica difference above. It is a "the path works" number, not a
+version comparison.
 
 ## Throughput: resolve cache handles once
 
