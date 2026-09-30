@@ -1,7 +1,7 @@
 package com.gridgain.demo.datagen.config
 
 const val CURRENT_DATA_SCHEMA_VERSION: Int = 3
-const val CURRENT_OPS_SCHEMA_VERSION: Int = 9
+const val CURRENT_OPS_SCHEMA_VERSION: Int = 10
 
 /**
  * State file ("`<demoOutputDirectory>/data-generator/state/state.yaml`") schema version.

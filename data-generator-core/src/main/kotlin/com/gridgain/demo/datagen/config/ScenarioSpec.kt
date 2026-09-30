@@ -27,7 +27,27 @@ data class ScenarioSpec(
     @JsonProperty("stop_conditions") val stopConditions: List<StopConditionSpec> = emptyList(),
     @JsonProperty("transaction_scope") val transactionScope: TransactionScope = TransactionScope.NONE,
     val provisioning: ProvisioningMode = ProvisioningMode.SKIP,
-    @JsonProperty("read_ratio") val readRatio: Double,
+    /**
+     * The mix of operations the scenario performs (v10+), replacing v9's `read_ratio` scalar.
+     *
+     * A single ratio could say only "some fraction are reads" and had no way to express a third
+     * operation, so `put_get` — a get and a put against one key — did not exist. [MigrateOpsV9toV10]
+     * converts `read_ratio: r` to `{get: r, put: 1-r, put_get: 0}`, so an upgraded file runs the
+     * mix it ran before.
+     */
+    val operations: OperationMix,
+    /**
+     * Operations performed but not measured (v10+). See [WarmupSpec] — every figure the generator
+     * reported before v10 included its own JIT and connection warm-up.
+     */
+    val warmup: WarmupSpec,
+    /**
+     * The domain of keys this scenario addresses (v10+). See [KeySpaceSpec].
+     *
+     * `bounded` is what makes a run repeatable against the same rows and a get able to hit;
+     * `unbounded` is the pre-v10 behaviour and what the migration writes.
+     */
+    @JsonProperty("key_space") val keySpace: KeySpaceSpec,
     /**
      * Worker threads one generator process drives (v8+). Each holds one operation in flight, so
      * this is what decides whether a process can saturate a fast cluster or stays pinned to the

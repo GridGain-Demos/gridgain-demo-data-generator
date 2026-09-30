@@ -18,7 +18,7 @@ class ExternalSignalControlValidatorTest {
     ) = ScenarioSpec(concurrency = 1, 
         name = name, rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0), duration = duration,
-        stopConditions = stopConditions, readRatio = 0.0,
+        stopConditions = stopConditions, operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
     )
 
     private fun ops(scenario: ScenarioSpec, control: ControlSpec?) = OpsConfig(

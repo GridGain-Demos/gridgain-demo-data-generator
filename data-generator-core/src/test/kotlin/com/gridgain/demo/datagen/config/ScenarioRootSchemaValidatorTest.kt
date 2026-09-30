@@ -11,7 +11,7 @@ class ScenarioRootSchemaValidatorTest {
         rate = ConstantRateSpec(100.0),
         duration = TimeDurationSpec("PT10S"),
         transactionScope = TransactionScope.BUSINESS_EVENT,
-        readRatio = 0.0,
+        operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
     )
 
     @Test

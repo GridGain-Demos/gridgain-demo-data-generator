@@ -1,14 +1,20 @@
 package com.gridgain.demo.datagen.scenario
 
+import com.gridgain.demo.datagen.config.BoundedKeySpaceSpec
 import com.gridgain.demo.datagen.config.ConstantRateSpec
 import com.gridgain.demo.datagen.config.CountDurationSpec
+import com.gridgain.demo.datagen.config.CountWarmupSpec
 import com.gridgain.demo.datagen.config.DataConfig
 import com.gridgain.demo.datagen.config.ExternalSignalStopSpec
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationKind
 import com.gridgain.demo.datagen.config.RampedRateSpec
 import com.gridgain.demo.datagen.config.SchemaSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SteppedRateSpec
 import com.gridgain.demo.datagen.config.TimeDurationSpec
+import com.gridgain.demo.datagen.config.TimeWarmupSpec
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.config.UntilStopDurationSpec
 import com.gridgain.demo.datagen.errors.MisconfigurationException
 import com.gridgain.demo.datagen.generation.BusinessEvent
@@ -18,9 +24,12 @@ import com.gridgain.demo.datagen.observability.Instruments
 import com.gridgain.demo.datagen.state.KeyRegistryState
 import com.gridgain.demo.datagen.target.Target
 import com.gridgain.demo.datagen.target.TransactionOutcome
+import com.gridgain.demo.datagen.target.WriteOutcome
+import io.opentelemetry.api.common.Attributes
 import java.time.Duration
 import java.time.Instant
 import java.util.Random
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -43,8 +52,10 @@ class ScenarioRunner(
     private val keyRegistry: KeyRegistry = KeyRegistry(),
     private val instruments: Instruments = Instruments.noop(),
     private val targetName: String = "<unknown>",
-    // Live throughput/latency counters. Defaults to a detached recorder no consumer reads, so
-    // the metric collection is opt-in by wiring a LiveMetricsReporter to the same instance.
+    // Live throughput/latency counters. Defaults to a detached recorder — detached meaning no
+    // LiveMetricsReporter publishes it, not that nothing is recorded. The run always reads its own
+    // histogram back for [ScenarioResult.latency], so the percentiles in `result.yaml` do not
+    // depend on the operator having configured a `metrics:` block and deployed a broker.
     private val metrics: MetricsRecorder = MetricsRecorder.detached(),
     /**
      * Pacing for the run, wrapped so an external command can override it mid-flight. Injectable
@@ -64,6 +75,11 @@ class ScenarioRunner(
 ) {
 
     private val totalAttempts = AtomicLong(0L)
+    /** Reads that succeeded and found nothing. Shared across workers, so atomic. */
+    private val readMisses = AtomicLong(0L)
+    /** Row-level writes and the operations that produced them — see [ScenarioResult.rowsPerWrite]. */
+    private val rowWrites = AtomicLong(0L)
+    private val writeOps = AtomicLong(0L)
     @Volatile private var startedNanos: Long = 0L
     /** Captures the post-run registry contents for `state.yaml`. Safe to call multiple times. */
     fun keyRegistrySnapshot(): List<KeyRegistryState> = keyRegistry.snapshot()
@@ -76,6 +92,26 @@ class ScenarioRunner(
                 "ScenarioRunner requires the KeyColumnValidator to have passed before construction."
             ))
     }
+
+    /**
+     * Turns a key-space index into the key the root schema actually uses — present only in bounded
+     * mode, where the key space supersedes the key column's own value source so that a put and a get
+     * can name the same row.
+     */
+    private val boundedKeys: BoundedKeyResolver? = when (val space = scenario.keySpace) {
+        is UnboundedKeySpaceSpec -> null
+        is BoundedKeySpaceSpec -> BoundedKeyResolver.of(
+            space, scenario.rootSchemas.first(), schemasByName, keyColumnByName,
+        )
+    }
+
+    // ---- Warmup window -----------------------------------------------------
+    // The boundary is crossed exactly once, by whichever worker observes it first. `measuredFrom`
+    // and `warmupAttempts` are written under that one-shot CAS and read only after the workers have
+    // joined, so a plain volatile pair would do; atomics keep the write and the guard together.
+    private val measurementBegun = AtomicBoolean(false)
+    private val measurementStartedNanos = AtomicLong(0L)
+    private val attemptsAtMeasurementStart = AtomicLong(0L)
 
     init {
         require(generators.isNotEmpty()) {
@@ -156,11 +192,21 @@ class ScenarioRunner(
         }
         stopReason.compareAndSet("", exhaustedReason)
 
+        val endedNanos = System.nanoTime()
         val wall = Duration.between(started, Instant.now())
         val successes = success.get()
         val errors = error.get()
-        val achievedRate = if (wall.toNanos() > 0)
-            (successes + errors).toDouble() / (wall.toNanos() / 1_000_000_000.0) else 0.0
+
+        // Throughput and latency both describe the **measured window** — everything after the
+        // warmup closed. A rate computed over the whole run would be dragged down by exactly the
+        // operations the warmup exists to exclude, and would disagree with the percentiles beside
+        // it. With `warmup: {kind: none}` the window is the whole run and this is a no-op.
+        val measuredOps = (successes + errors) - attemptsAtMeasurementStart.get()
+        val measuredNanos =
+            if (measurementBegun.get()) endedNanos - measurementStartedNanos.get() else 0L
+        val achievedRate = if (measuredNanos > 0)
+            measuredOps.toDouble() / (measuredNanos / 1_000_000_000.0) else 0.0
+
         return ScenarioResult(
             scenarioName = scenario.name,
             achievedRate = achievedRate,
@@ -168,6 +214,16 @@ class ScenarioRunner(
             successCount = successes,
             stopReason = stopReason.get(),
             wallTime = wall,
+            readMissCount = readMisses.get(),
+            rowsWritten = rowWrites.get(),
+            rowsPerWrite = writeOps.get().let { if (it > 0) rowWrites.get().toDouble() / it else 0.0 },
+            measuredOperations = measuredOps,
+            measuredWindow = Duration.ofNanos(measuredNanos),
+            // Read unconditionally. [metrics] defaults to a detached recorder, but detached means
+            // "no reporter is publishing this", not "nothing is recorded" — the histogram is fed by
+            // every operation either way. Summarising it here is what makes a run quotable from its
+            // own results file rather than only from a live Kafka feed.
+            latency = LatencySummary.from(metrics.measuredSnapshot()),
         )
     }
 
@@ -210,45 +266,40 @@ class ScenarioRunner(
         evaluator: StopConditionEvaluator,
     ): Boolean {
         rateLimiter.acquire()
+        // Before the operation, so the one that crosses the boundary is measured rather than
+        // discarded — and so a `time` warmup ends on the clock rather than on the next op's latency.
+        closeWarmupIfDue()
         // Re-published every tick because the target moves: a ramp/step walks it, and the control
         // channel can override it at any moment. One atomic store is nothing next to the round trip
         // below, and it keeps the OTel gauge honest for the Grafana requested-vs-achieved panel.
         instruments.targetRateRef.set(rateLimiter.currentTargetTps())
         val rootSchemaName = scenario.rootSchemas.first()  // multi-root weighting deferred
         val rootKeyColumn = keyColumnByName[rootSchemaName]!!
-        val isRead = scenario.readRatio > 0.0 &&
-            // supportsReads is target.kt's only remaining reader (supportsTransactions has none).
-            // The read_ratio/supportsReads coherence check used to live in ScenarioTargetValidator
-            // and was removed along with ops v7's targets:. A target kind that cannot read,
-            // combined with a nonzero read_ratio, would silently fall through this conjunct to
-            // 100% writes — target kind #3 that cannot read must reinstate an explicit
-            // misconfiguration error rather than let this line absorb the mismatch.
-            target.supportsReads &&
-            decisionRandom.nextDouble() < scenario.readRatio &&
-            keyRegistry.size(rootSchemaName) > 0
-        val op = if (isRead) "get" else "put"
-        val attrs = instruments.opAttributes(scenario.name, targetName, rootSchemaName, op)
+        val kind = chooseOperation(rootSchemaName)
+        val attrs = instruments.opAttributes(scenario.name, targetName, rootSchemaName, kind.metricLabel)
 
         instruments.inFlight.add(1, attrs)
         val t0 = System.nanoTime()
         var transactionOutcome: TransactionOutcome = TransactionOutcome.NONE
         val success: Boolean = try {
-            if (isRead) {
-                val key = keyRegistry.sample(rootSchemaName, decisionRandom)!!
-                target.read(rootSchemaName, key).success
-            } else {
-                val event = generator.next()
-                val rootSchema = schemasByName[rootSchemaName]!!
-                val finalEvent = maybeApplyUpdate(event, rootSchema, rootKeyColumn)
-                val parentKey = finalEvent.parentRow[rootKeyColumn]!!
-                keyRegistry.register(rootSchemaName, parentKey)
-                finalEvent.childrenBySchema.forEach { (childSchema, rows) ->
-                    val childKeyColumn = keyColumnByName[childSchema] ?: return@forEach
-                    rows.forEach { row -> row[childKeyColumn]?.let { keyRegistry.register(childSchema, it) } }
+            when (kind) {
+                OperationKind.GET -> performRead(rootSchemaName, readKey(rootSchemaName), attrs)
+                OperationKind.PUT -> {
+                    val outcome = performWrite(generator, rootSchemaName, rootKeyColumn, key = null)
+                    transactionOutcome = outcome.transactionOutcome
+                    outcome.success
                 }
-                val outcome = target.write(finalEvent)
-                transactionOutcome = outcome.transactionOutcome
-                outcome.success
+                // The read-modify-write `PutGetBenchmark` measures: one key, read then written,
+                // counted as a single operation. Deliberately not two ops — the pair is what an
+                // application actually performs, and splitting it would report twice the throughput
+                // at half the latency for the same work.
+                OperationKind.PUT_GET -> {
+                    val key = readKey(rootSchemaName)
+                    val read = performRead(rootSchemaName, key, attrs)
+                    val outcome = performWrite(generator, rootSchemaName, rootKeyColumn, key = key)
+                    transactionOutcome = outcome.transactionOutcome
+                    read && outcome.success
+                }
             }
         } catch (e: Exception) {
             instruments.opErrors.add(1, attrs.toBuilder()
@@ -282,6 +333,100 @@ class ScenarioRunner(
         val elapsedSec = (System.nanoTime() - startedNanos) / 1_000_000_000.0
         if (elapsedSec > 0) instruments.observedRateRef.set(attempts / elapsedSec)
         return success
+    }
+
+    /**
+     * Pick this tick's operation, then fall back to a put if it cannot be performed.
+     *
+     * Two things can make a read impossible: a target that cannot read at all, and — in unbounded
+     * mode only — a key registry that is still empty, because the only keys a read can name there
+     * are ones this process has already written. Bounded mode has neither problem, which is a large
+     * part of why it exists.
+     *
+     * ⚠️ A target that cannot read, paired with a nonzero `get` weight, silently becomes 100% puts
+     * here. That was true of `read_ratio` before it and is carried forward unchanged; a third target
+     * kind that cannot read must reinstate an explicit misconfiguration error rather than let this
+     * absorb the mismatch.
+     */
+    private fun chooseOperation(rootSchemaName: String): OperationKind {
+        val chosen = scenario.operations.choose(decisionRandom)
+        if (chosen == OperationKind.PUT) return chosen
+        val canRead = target.supportsReads &&
+            (boundedKeys != null || keyRegistry.size(rootSchemaName) > 0)
+        return if (canRead) chosen else OperationKind.PUT
+    }
+
+    /** Bounded mode draws from the key space; unbounded mode samples what this run has written. */
+    private fun readKey(rootSchemaName: String): Any =
+        boundedKeys?.nextKey(decisionRandom)
+            ?: keyRegistry.sample(rootSchemaName, decisionRandom)!!
+
+    private fun performRead(rootSchemaName: String, key: Any, attrs: Attributes): Boolean {
+        val outcome = target.read(rootSchemaName, key)
+        // A successful read that found nothing is a miss, and it has to be visible. Only the flag
+        // used to be looked at, so a run whose every get missed reported a healthy rate and a clean
+        // error count — a benchmark of how fast the cluster can say "no". It is deliberately not an
+        // error: a sparse key space is not a broken cluster.
+        if (outcome.success && outcome.value == null) {
+            readMisses.incrementAndGet()
+            instruments.opMisses.add(1, attrs)
+        }
+        return outcome.success
+    }
+
+    /**
+     * Generate an event and write it. [key] forces the parent key, which is how the put half of a
+     * `put_get` lands on the row the get half just read, and how bounded mode addresses its space.
+     */
+    private fun performWrite(
+        generator: BusinessEventGenerator,
+        rootSchemaName: String,
+        rootKeyColumn: String,
+        key: Any?,
+    ): WriteOutcome {
+        val event = generator.next()
+        val rootSchema = schemasByName[rootSchemaName]!!
+        val forcedKey = key ?: boundedKeys?.nextKey(decisionRandom)
+        val finalEvent = if (forcedKey != null) {
+            event.copy(parentRow = LinkedHashMap(event.parentRow).also { it[rootKeyColumn] = forcedKey })
+        } else {
+            maybeApplyUpdate(event, rootSchema, rootKeyColumn)
+        }
+        val parentKey = finalEvent.parentRow[rootKeyColumn]!!
+        keyRegistry.register(rootSchemaName, parentKey)
+        finalEvent.childrenBySchema.forEach { (childSchema, rows) ->
+            val childKeyColumn = keyColumnByName[childSchema] ?: return@forEach
+            rows.forEach { row -> row[childKeyColumn]?.let { keyRegistry.register(childSchema, it) } }
+        }
+        // One operation is one business event, which may be many rows across several caches. Counted
+        // rather than derived, because cohort buckets make the fan-out vary per event. Without it
+        // `achieved_rate` looks like puts/sec while counting events, and two runs over different
+        // data.yaml files are silently incomparable.
+        rowWrites.addAndGet(1L + finalEvent.childrenBySchema.values.sumOf { it.size })
+        writeOps.incrementAndGet()
+        return target.write(finalEvent)
+    }
+
+    /**
+     * Close the warmup window the first time a worker sees it end.
+     *
+     * Checked before the operation rather than after it, so the operation that crosses the boundary
+     * is measured rather than discarded. `update_ratio`'s substitution is skipped in bounded mode
+     * for the same reason bounded mode exists at all — the key space already decides which row is
+     * written, and layering a second key-reuse rule on top would make the distribution unreportable.
+     */
+    private fun closeWarmupIfDue() {
+        if (measurementBegun.get()) return
+        val done = when (val w = scenario.warmup) {
+            is NoWarmupSpec -> true
+            is CountWarmupSpec -> totalAttempts.get() >= w.value
+            is TimeWarmupSpec -> System.nanoTime() - startedNanos >= Duration.parse(w.value).toNanos()
+        }
+        if (done && measurementBegun.compareAndSet(false, true)) {
+            measurementStartedNanos.set(System.nanoTime())
+            attemptsAtMeasurementStart.set(totalAttempts.get())
+            metrics.beginMeasurement()
+        }
     }
 
     private fun emitTxOp(schemaName: String, op: String, latencyNanos: Long) {

@@ -13,6 +13,9 @@ import com.gridgain.demo.datagen.config.SteppedRateSpec
 import com.gridgain.demo.datagen.config.TimeDurationSpec
 import com.gridgain.demo.datagen.config.TransactionScope
 import com.gridgain.demo.datagen.config.UntilStopDurationSpec
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
@@ -49,7 +52,7 @@ class ScenarioRunnerExtendedTest {
             rate = RampedRateSpec(from = 100.0, to = 1000.0, over = "PT0.1S"),
             duration = TimeDurationSpec("PT0.2S"),
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         val result = runner(dir, scenario).run()
         assertThat(result.successCount).isGreaterThan(20L)
@@ -67,7 +70,7 @@ class ScenarioRunnerExtendedTest {
             )),
             duration = TimeDurationSpec("PT0.1S"),
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         val result = runner(dir, scenario).run()
         assertThat(result.successCount).isGreaterThan(15L)
@@ -82,7 +85,7 @@ class ScenarioRunnerExtendedTest {
             rate = ConstantRateSpec(opsPerSecond = 100.0),
             duration = UntilStopDurationSpec(),
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         val result = runner(dir, scenario).run()
         assertThat(result.stopReason).isEqualTo("until_stop_condition cap reached")
@@ -109,7 +112,7 @@ class ScenarioRunnerExtendedTest {
             duration = UntilStopDurationSpec(),
             stopConditions = listOf(ErrorRateStopSpec(threshold = 0.05)),
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         val result = runner(dir, scenario, target).run()
         assertThat(result.stopReason).contains("error_rate")

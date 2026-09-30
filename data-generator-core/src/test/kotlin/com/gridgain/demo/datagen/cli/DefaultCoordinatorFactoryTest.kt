@@ -4,6 +4,9 @@ import com.gridgain.demo.datagen.config.ConstantRateSpec
 import com.gridgain.demo.datagen.config.CountDurationSpec
 import com.gridgain.demo.datagen.config.DistributionSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.logging.DataGenLogger
 import org.assertj.core.api.Assertions.assertThat
 import kotlin.test.Test
@@ -24,7 +27,7 @@ class DefaultCoordinatorFactoryTest {
         rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0),
         duration = CountDurationSpec(200),
-        readRatio = 0.0,
+        operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         distribution = distribution,
     )
 

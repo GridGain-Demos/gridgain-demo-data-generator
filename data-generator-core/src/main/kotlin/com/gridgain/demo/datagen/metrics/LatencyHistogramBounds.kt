@@ -49,14 +49,18 @@ data class LatencyHistogramBounds(
         private const val MAX_HIGHEST_MS: Long = Long.MAX_VALUE / 1_000L
 
         /**
-         * Bounds for a recorder no consumer reads.
+         * Bounds for a recorder no reporter publishes.
          *
          * [com.gridgain.demo.datagen.scenario.ScenarioRunner] defaults to a detached
-         * [MetricsRecorder] so metrics collection stays opt-in by wiring a reporter to the same
-         * instance. That recorder's histogram is never encoded or queried, so these are not a
-         * configuration default standing in for a missing `metrics:` block — they are the shape of
-         * an object with no reader. The production path always builds bounds from
-         * [com.gridgain.demo.datagen.config.MetricsSpec]; see `ScenarioRunnerCli`.
+         * [MetricsRecorder] so that *publishing* stays opt-in by wiring a reporter to the same
+         * instance. That histogram **is** queried — the run summarises it into `result.yaml`'s
+         * percentiles — so these values have to be usable, not merely present, and they are
+         * deliberately the same one-minute / three-digit pair the JSONSchema recommends.
+         *
+         * They are still not a configuration default standing in for a missing `metrics:` block:
+         * the production path always builds bounds from
+         * [com.gridgain.demo.datagen.config.MetricsSpec], and an operator who configures the block
+         * gets their own values here. See `ScenarioRunnerCli`.
          */
         fun detached(): LatencyHistogramBounds =
             LatencyHistogramBounds(highestMs = 60_000L, significantDigits = 3)

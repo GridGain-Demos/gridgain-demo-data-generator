@@ -12,7 +12,9 @@ class ProvisioningModeDeserializationTest {
         root_schemas: [customer]
         rate: { kind: constant, ops_per_second: 1.0 }
         duration: { kind: count, value: 1 }
-        read_ratio: 0.0
+        operations: { put: 1.0, get: 0.0, put_get: 0.0 }
+        warmup: { kind: none }
+        key_space: { kind: unbounded }
     """.trimIndent()
 
     @Test fun `defaults to SKIP when omitted`() {

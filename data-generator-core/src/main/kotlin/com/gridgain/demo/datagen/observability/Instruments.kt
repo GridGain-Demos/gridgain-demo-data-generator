@@ -29,6 +29,14 @@ class Instruments(otel: OpenTelemetry) {
         const val OP_LATENCY = "data_generator.op.latency"
         const val OP_COUNT = "data_generator.op.count"
         const val OP_ERRORS = "data_generator.op.errors"
+        /**
+         * Reads that succeeded and found nothing.
+         *
+         * Separate from [OP_ERRORS] because a miss is not a failure. Its value is as a ratio against
+         * `op=get` in [OP_COUNT]: a read-heavy run whose miss ratio is near 1 is measuring the
+         * cluster's empty path, and its throughput figure means nothing.
+         */
+        const val OP_MISSES = "data_generator.op.misses"
         const val IN_FLIGHT = "data_generator.in_flight"
         const val TARGET_RATE = "data_generator.target_rate"
         const val OBSERVED_RATE = "data_generator.observed_rate"
@@ -58,6 +66,45 @@ class Instruments(otel: OpenTelemetry) {
         /** Convenience for the default scope name across all data-generator instruments. */
         const val SCOPE = "com.gridgain.demo.datagen"
 
+        /**
+         * Explicit bucket boundaries for [OP_LATENCY], in **nanoseconds**.
+         *
+         * Without these the SDK applies its default boundaries, which end at 10,000 — a sensible
+         * ceiling for a metric measured in milliseconds and a catastrophic one for a metric measured
+         * in nanoseconds, where it means 10 microseconds. Every operation the generator has ever
+         * performed therefore landed in the `+Inf` bucket, and `histogram_quantile` over
+         * `data_generator_op_latency_nanoseconds_bucket` had nothing finite to interpolate between.
+         * The series was emitted, scraped and stored for the whole life of the generator, and was
+         * never able to answer the question it exists to answer.
+         *
+         * The unit stays nanoseconds rather than moving to milliseconds on purpose. Prometheus names
+         * the series after its unit, so switching would rename it and silently empty every existing
+         * dashboard panel and recording rule rather than fix them.
+         *
+         * Roughly logarithmic from 10 µs to 10 s: dense where a cache hit lives, sparse across the
+         * tail where only the order of magnitude matters.
+         */
+        val LATENCY_BUCKETS_NANOS: List<Double> = listOf(
+            10_000.0,          //  10 µs
+            25_000.0,          //  25 µs
+            50_000.0,          //  50 µs
+            100_000.0,         // 100 µs
+            250_000.0,         // 250 µs
+            500_000.0,         // 500 µs
+            1_000_000.0,       //   1 ms
+            2_500_000.0,       // 2.5 ms
+            5_000_000.0,       //   5 ms
+            10_000_000.0,      //  10 ms
+            25_000_000.0,      //  25 ms
+            50_000_000.0,      //  50 ms
+            100_000_000.0,     // 100 ms
+            250_000_000.0,     // 250 ms
+            500_000_000.0,     // 500 ms
+            1_000_000_000.0,   //   1 s
+            5_000_000_000.0,   //   5 s
+            10_000_000_000.0,  //  10 s
+        )
+
         /** Returns an `Instruments` backed by `OpenTelemetry.noop()` — the production fallback. */
         fun noop(): Instruments = Instruments(OpenTelemetry.noop())
     }
@@ -65,11 +112,15 @@ class Instruments(otel: OpenTelemetry) {
     private val meter: Meter = otel.meterBuilder(SCOPE).build()
 
     val opLatency: DoubleHistogram = meter.histogramBuilder(OP_LATENCY)
-        .setDescription("End-to-end latency of one target op.").setUnit("ns").build()
+        .setDescription("End-to-end latency of one target op.").setUnit("ns")
+        .setExplicitBucketBoundariesAdvice(LATENCY_BUCKETS_NANOS)
+        .build()
     val opCount: LongCounter = meter.counterBuilder(OP_COUNT)
         .setDescription("Count of completed target ops.").build()
     val opErrors: LongCounter = meter.counterBuilder(OP_ERRORS)
         .setDescription("Count of failed target ops, tagged by exception class.").build()
+    val opMisses: LongCounter = meter.counterBuilder(OP_MISSES)
+        .setDescription("Count of reads that succeeded and found no value.").build()
     val inFlight: LongUpDownCounter = meter.upDownCounterBuilder(IN_FLIGHT)
         .setDescription("In-flight target ops at this instant.").build()
 

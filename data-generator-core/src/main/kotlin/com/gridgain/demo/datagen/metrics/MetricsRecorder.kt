@@ -47,6 +47,33 @@ class MetricsRecorder private constructor(
         bounds.significantDigits,
     )
 
+    /**
+     * The post-warmup window only — a **second** histogram rather than a reset of the first.
+     *
+     * The whole-run histogram feeds the live Kafka snapshot, whose consumers merge it across a fleet
+     * and expect it to cover the run. Resetting it at the warmup boundary would silently change that
+     * contract and make a mid-run graph disagree with itself. Two histograms cost one bounded
+     * allocation and one extra record per operation, which is nothing beside the round trip being
+     * measured, and keep the two questions — "what is happening now" and "what does this run
+     * report" — genuinely separate.
+     */
+    private val measured = ConcurrentHistogram(
+        bounds.highestTrackableMicros,
+        bounds.significantDigits,
+    )
+
+    /** False until [beginMeasurement]; a warmup operation is recorded in [histogram] alone. */
+    @Volatile private var measuring = false
+
+    /**
+     * Close the warmup window: from here on, operations also enter the measured histogram.
+     *
+     * Idempotent, and safe to call from whichever worker observes the boundary first.
+     */
+    fun beginMeasurement() {
+        measuring = true
+    }
+
     fun record(latencyNanos: Long, success: Boolean) {
         ops.incrementAndGet()
         this.latencyNanos.addAndGet(latencyNanos)
@@ -55,9 +82,9 @@ class MetricsRecorder private constructor(
         // configured bound (or below zero), and killing a generator run because one operation was
         // unusually slow is strictly worse than a p99 pinned at the ceiling — which is the honest
         // reading of "slower than the configured bound can measure" anyway.
-        histogram.recordValue(
-            (latencyNanos / 1_000L).coerceIn(0L, bounds.highestTrackableMicros)
-        )
+        val micros = (latencyNanos / 1_000L).coerceIn(0L, bounds.highestTrackableMicros)
+        histogram.recordValue(micros)
+        if (measuring) measured.recordValue(micros)
     }
 
     fun counters(): Counters = Counters(ops.get(), latencyNanos.get(), errors.get())
@@ -70,16 +97,27 @@ class MetricsRecorder private constructor(
      */
     fun histogramSnapshot(): Histogram = histogram.copy()
 
+    /**
+     * A stable copy of the **measured window** — everything after [beginMeasurement] — in
+     * microseconds. This is what `result.yaml` reports, so a run's quoted percentiles describe the
+     * cluster rather than the JVM's first thousand operations.
+     */
+    fun measuredSnapshot(): Histogram = measured.copy()
+
     /** Cumulative-since-construction snapshot of the raw counters. */
     data class Counters(val ops: Long, val latencyNanos: Long, val errors: Long)
 
     companion object {
         /**
-         * A recorder no consumer reads — the default
-         * [com.gridgain.demo.datagen.scenario.ScenarioRunner] uses so that metrics collection stays
-         * opt-in by wiring a reporter to the same instance. See
-         * [LatencyHistogramBounds.detached] for why this is not a configuration default, and
-         * [isDetached] for how a wiring call site can tell this instance apart from a configured one.
+         * A recorder **no reporter publishes** — the default
+         * [com.gridgain.demo.datagen.scenario.ScenarioRunner] uses so that *publishing* metrics
+         * stays opt-in by wiring a reporter to the same instance.
+         *
+         * Detached is not inert. It records exactly as a configured recorder does, and the run reads
+         * its histogram back for `result.yaml`'s percentiles — so a run with no `metrics:` block
+         * still reports its own latency. See [LatencyHistogramBounds.detached] for why these bounds
+         * are not a configuration default, and [isDetached] for how a wiring call site can tell this
+         * instance apart from a configured one.
          */
         fun detached(): MetricsRecorder =
             MetricsRecorder(LatencyHistogramBounds.detached(), isDetached = true)

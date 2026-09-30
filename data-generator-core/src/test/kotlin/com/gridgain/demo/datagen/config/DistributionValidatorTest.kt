@@ -13,7 +13,7 @@ class DistributionValidatorTest {
     private fun scenario(name: String, distribution: DistributionSpec?) = ScenarioSpec(concurrency = 1, 
         name = name, rootSchemas = listOf("customer"),
         rate = ConstantRateSpec(100.0), duration = TimeDurationSpec("PT1S"),
-        readRatio = 0.0,
+        operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         distribution = distribution,
     )
 

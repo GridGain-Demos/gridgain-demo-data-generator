@@ -1,6 +1,9 @@
 package com.gridgain.demo.datagen.provisioning
 
 import com.gridgain.demo.datagen.config.*
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import org.assertj.core.api.Assertions.assertThat
 import kotlin.test.Test
 
@@ -10,7 +13,7 @@ class ProvisioningPlanFactoryTest {
     private fun scenario(scope: TransactionScope = TransactionScope.NONE) =
         ScenarioSpec(concurrency = 1, name = "s1", rootSchemas = listOf("customer"),
             rate = ConstantRateSpec(1.0), duration = CountDurationSpec(1L),
-            transactionScope = scope, readRatio = 0.0)
+            transactionScope = scope, operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec())
 
     @Test fun `simple schema with sequence key`() {
         val data = DataConfig(2, listOf(SchemaSpec("customer", 0.0, listOf(

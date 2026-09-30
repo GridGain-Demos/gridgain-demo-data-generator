@@ -8,6 +8,9 @@ import com.gridgain.demo.datagen.config.SchemaSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.TransactionScope
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
@@ -62,7 +65,7 @@ class ScenarioRunnerInstrumentsTest {
         rate = ConstantRateSpec(opsPerSecond),
         duration = CountDurationSpec(count.toLong()),
         transactionScope = TransactionScope.NONE,
-        readRatio = readRatio,
+        operations = OperationMix(put = 1.0 - readRatio, get = readRatio, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
     )
 
     @Test fun `successful writes record op_count and op_latency under op=put`(@TempDir dir: Path) {

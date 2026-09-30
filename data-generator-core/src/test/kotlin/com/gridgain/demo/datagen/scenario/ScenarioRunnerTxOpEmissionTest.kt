@@ -8,6 +8,9 @@ import com.gridgain.demo.datagen.config.SchemaSpec
 import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.TransactionScope
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
@@ -61,7 +64,7 @@ class ScenarioRunnerTxOpEmissionTest {
             rate = ConstantRateSpec(1000.0),
             duration = CountDurationSpec(count),
             transactionScope = TransactionScope.BUSINESS_EVENT,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         return ScenarioRunner(
             scenario = scenario, data = data, generators = listOf(gen), target = target,

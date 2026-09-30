@@ -1,6 +1,5 @@
 package com.gridgain.demo.datagen.scenario
 
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 
 /**
@@ -19,10 +18,8 @@ import java.util.concurrent.locks.ReentrantLock
  */
 class ControllableRateLimiter(
     private val delegate: RateLimiter,
-    private val nanoTime: () -> Long = System::nanoTime,
-    private val sleeper: (Long) -> Unit = { nanos ->
-        Thread.sleep(nanos / 1_000_000, (nanos % 1_000_000).toInt())
-    },
+    nanoTime: () -> Long = System::nanoTime,
+    sleeper: (Long) -> Unit = PacingWait::await,
 ) : RateLimiter {
 
     /** NaN means "no override" — a sentinel keeps this a single volatile read, so [acquire] can
@@ -34,23 +31,11 @@ class ControllableRateLimiter(
     @Volatile private var released: Boolean = false
 
     /**
-     * The instant the next operation may start. Atomic because with `concurrency > 1` every
-     * worker thread reserves from this one cursor: each [acquire] must claim its own slot, or
-     * several threads read the same value, wait for the same instant and fire together — the
-     * process then runs at a multiple of the requested rate and the limiter silently stops
-     * limiting. Reserved with a CAS rather than under [lock] so that the waiting happens outside
-     * any lock and the threads genuinely stagger.
+     * The override's own pacing cursor. The [delegate] keeps a separate one, which is why
+     * [setRate] resets this and [clearOverride] does not touch the delegate's: switching between
+     * the two schedules is a change of pacing, not a rewind of the run.
      */
-    private val nextAllowedNanos = AtomicLong(nanoTime())
-
-    /**
-     * Serialises calls into [delegate]. The configured limiters ([ConstantRateLimiter],
-     * [RampedRateLimiter], [SteppedRateLimiter]) each carry their own unguarded cursor, so only
-     * one thread may be inside one at a time. Deliberately **not** [lock]: the delegate sleeps
-     * while holding this, and a [setRate] arriving from the control channel must not queue behind
-     * that sleep.
-     */
-    private val delegateLock = ReentrantLock()
+    private val cursor = PacingCursor(nanoTime, sleeper)
 
     private val lock = ReentrantLock()
     private val rateRaised = lock.newCondition()
@@ -68,7 +53,7 @@ class ControllableRateLimiter(
         lock.lock()
         try {
             overrideTps = opsPerSecond
-            nextAllowedNanos.set(nanoTime())
+            cursor.reset()
             rateRaised.signalAll()
         } finally {
             lock.unlock()
@@ -109,12 +94,16 @@ class ControllableRateLimiter(
     override fun acquire() {
         val rate = overrideTps
         if (rate.isNaN()) {
-            delegateLock.lock()
-            try {
-                delegate.acquire()
-            } finally {
-                delegateLock.unlock()
-            }
+            // Straight through, holding nothing. The delegate reserves from its own [PacingCursor]
+            // and is safe for every worker to enter at once.
+            //
+            // This used to be guarded by a second lock, because the configured limiters carried
+            // unguarded cursors. That lock was held across the delegate's wait, so the workers
+            // queued on each other instead of on the clock and the process paced as though it had
+            // one thread. It is the reason a fleet measured 128 workers holding ~50 operations in
+            // flight, and why splitting the same threads across twice as many processes made the
+            // generator *faster*.
+            delegate.acquire()
             return
         }
         if (rate <= 0.0) {
@@ -122,19 +111,7 @@ class ControllableRateLimiter(
             return
         }
         val interval = (1_000_000_000.0 / rate).toLong()
-        // Claim a slot, then wait for it outside the CAS. Retrying on a lost race is correct
-        // rather than merely safe: the winner has already moved the cursor past the instant this
-        // caller was about to take, so the right answer is to take the next one.
-        while (true) {
-            val cursor = nextAllowedNanos.get()
-            val now = nanoTime()
-            val deadline = maxOf(cursor, now)
-            if (nextAllowedNanos.compareAndSet(cursor, deadline + interval)) {
-                val sleep = deadline - now
-                if (sleep > 0) sleeper(sleep)
-                return
-            }
-        }
+        cursor.acquire { interval }
     }
 
     override fun currentTargetTps(): Double {

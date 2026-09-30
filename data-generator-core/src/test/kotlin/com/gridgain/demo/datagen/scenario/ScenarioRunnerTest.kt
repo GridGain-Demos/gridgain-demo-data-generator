@@ -9,6 +9,9 @@ import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.TimeDurationSpec
 import com.gridgain.demo.datagen.config.TransactionScope
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
 import com.gridgain.demo.datagen.target.InMemoryTarget
@@ -31,6 +34,35 @@ class ScenarioRunnerTest {
         return ScenarioRunner(scenario = scenario, data = data, generators = listOf(gen), target = target)
     }
 
+    /**
+     * Every run reports latency, whether or not anyone wired a metrics sink to it.
+     *
+     * The runner already defaults to a recorder whose histogram is fed by every operation; nothing
+     * ever read it. A benchmark-shaped run has to be quotable from its own `result.yaml` alone —
+     * needing a Kafka broker deployed before a p99 exists is not a reporting channel, it is a
+     * reason nobody has a p99.
+     */
+    @Test
+    fun `a run reports latency percentiles without a metrics block`(@TempDir dir: Path) {
+        val scenario = ScenarioSpec(concurrency = 1,
+            name = "latency",
+            rootSchemas = listOf("customer"),
+            rate = ConstantRateSpec(opsPerSecond = 1000.0),
+            duration = CountDurationSpec(value = 200),
+            transactionScope = TransactionScope.NONE,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
+        )
+        val result = runner(dir, scenario).run()
+
+        assertThat(result.successCount).isEqualTo(200)
+        assertThat(result.latency.maxMs)
+            .describedAs("200 operations were recorded, so the histogram cannot be empty")
+            .isGreaterThan(0.0)
+        assertThat(result.latency.p50Ms).isLessThanOrEqualTo(result.latency.p90Ms)
+        assertThat(result.latency.p90Ms).isLessThanOrEqualTo(result.latency.p99Ms)
+        assertThat(result.latency.p99Ms).isLessThanOrEqualTo(result.latency.maxMs)
+    }
+
     @Test
     fun `count duration writes exactly N events`(@TempDir dir: Path) {
         val target = InMemoryTarget()
@@ -40,7 +72,7 @@ class ScenarioRunnerTest {
             rate = ConstantRateSpec(opsPerSecond = 1000.0),
             duration = CountDurationSpec(value = 50),
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         val result = runner(dir, scenario, target).run()
         assertThat(target.writes).hasSize(50)
@@ -59,7 +91,7 @@ class ScenarioRunnerTest {
             rate = ConstantRateSpec(opsPerSecond = 100.0),
             duration = TimeDurationSpec("PT0.2S"),
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
         val result = runner(dir, scenario, target).run()
         assertThat(result.wallTime.toMillis()).isBetween(180L, 600L)

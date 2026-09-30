@@ -11,6 +11,9 @@ import com.gridgain.demo.datagen.config.ScenarioSpec
 import com.gridgain.demo.datagen.config.SequenceSpec
 import com.gridgain.demo.datagen.config.TransactionScope
 import com.gridgain.demo.datagen.config.UntilStopDurationSpec
+import com.gridgain.demo.datagen.config.NoWarmupSpec
+import com.gridgain.demo.datagen.config.OperationMix
+import com.gridgain.demo.datagen.config.UnboundedKeySpaceSpec
 import com.gridgain.demo.datagen.generation.BusinessEvent
 import com.gridgain.demo.datagen.generation.BusinessEventGenerator
 import com.gridgain.demo.datagen.generation.ValueSourceFactory
@@ -70,7 +73,7 @@ class ScenarioRunnerConcurrencyTest {
             duration = duration,
             stopConditions = stopConditions,
             transactionScope = TransactionScope.NONE,
-            readRatio = 0.0,
+            operations = OperationMix(put = 1.0, get = 0.0, putGet = 0.0), warmup = NoWarmupSpec(), keySpace = UnboundedKeySpaceSpec(),
         )
 
     /** One generator per worker, each striped so no two emit the same key. */

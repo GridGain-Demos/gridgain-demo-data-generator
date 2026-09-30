@@ -5,7 +5,7 @@ description: How to USE the GridGain demo data generator — authoring ops.yaml/
 
 # GridGain Demo Data Generator — Usage
 
-*Last updated: 2026-09-24*
+*Last updated: 2026-09-30*
 
 A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **standalone** component (consumed by the plugin and the demo UI, but depends on neither). This skill is the usage contract: the config surface and the semantics that bite. It does **not** describe how any particular consumer launches it — for the gradle plugin's `dataGenerate` dispatch, see the `gridgain-demo-toolkit` skill.
 
@@ -15,7 +15,7 @@ A YAML-configured streaming data generator for GridGain 8/9 clusters. It is a **
 
 | File | Purpose | Current schema_version |
 |------|---------|------------------------|
-| `ops.yaml` | scenarios (rate/duration/scope/concurrency), metrics, control, otel | **9** |
+| `ops.yaml` | scenarios (rate/duration/scope/concurrency/**operations/warmup/key_space**), metrics, control, otel | **10** |
 | `data.yaml` | schemas → columns → value sources, FK relations, **replication** | **3** |
 
 Both carry a `schema_version` and are **auto-migrated** forward before validation (`OpsConfigMigrationRunner`, `DataConfigMigrationRunner`). Validation failures are fatal with remediation text.
@@ -23,7 +23,7 @@ Both carry a `schema_version` and are **auto-migrated** forward before validatio
 ## ops.yaml
 
 ```yaml
-schema_version: 9
+schema_version: 10
 metrics:                       # optional — live throughput/latency to Kafka (§Metrics)
   broker:                            # v9 — a reference, not an address (§Broker references)
     kind: element
@@ -46,7 +46,12 @@ scenarios:
     rate: { kind: constant, ops_per_second: 1000 }
     duration: { kind: time, value: "PT10M" }   # ISO-8601 Duration (see gotcha)
     concurrency: 32            # required from v8 — worker threads in THIS process (§Concurrency)
-    read_ratio: 0.20           # 0.0–1.0 fraction of ops that are reads
+    operations:                # required from v10 — replaces read_ratio; must sum to 1.0
+      put: 0.80
+      get: 0.20
+      put_get: 0.0             # a get AND a put on ONE key, counted as one operation
+    warmup: { kind: none }     # required from v10 — none | time | count (§Benchmark-shaped runs)
+    key_space: { kind: unbounded }   # required from v10 — unbounded | bounded (§Benchmark-shaped runs)
     transaction_scope: none    # none | business_event (see gotcha)
     provisioning: skip         # skip | emit | apply
     distribution:              # optional — multi-pod (see gotcha)
@@ -76,7 +81,9 @@ scenarios:
     concurrency: 32
     stop_conditions:
       - { kind: external_signal }
-    read_ratio: 0.0
+    operations: { put: 1.0, get: 0.0, put_get: 0.0 }
+    warmup: { kind: none }
+    key_space: { kind: unbounded }
 ```
 
 - **It requires a top-level `control:` block.** Without one nothing can raise the signal, so the run would be unbounded and unstoppable short of a SIGTERM. `ExternalSignalControlValidator` fails the parse naming the scenario and the block to add.
@@ -85,6 +92,102 @@ scenarios:
 - `until_stop_condition` with **no** `stop_conditions` at all is not rejected — nothing rejected it before either — but it now logs a config warning, because nothing decides when such a run ends and it just runs into the one-minute cap.
 
 **`provisioning`:** `skip` (caches/tables must already exist — the norm when something else owns the schema) · `emit` (write cache XML / DDL to the output dir, don't apply) · `apply` (create absent caches/tables).
+
+## Benchmark-shaped runs (v10+)
+
+Three keys turn a scenario from a data stream into something whose numbers mean something. All are
+**required** from v10; `MigrateOpsV9toV10` writes the pre-v10 behaviour into every existing scenario,
+so an upgraded file runs exactly the workload it ran before.
+
+### `operations` — replaces `read_ratio`
+
+```yaml
+operations: { put: 0.0, get: 0.0, put_get: 1.0 }   # must sum to 1.0 (checked at parse, ±0.001)
+```
+
+`put_get` is a get **and** a put against **one key**, counted as a single operation — the
+read-modify-write a real application performs, and what Yardstick's `PutGetBenchmark` measures. It
+is not the same as interleaving independent gets and puts, which is all `read_ratio` could ever
+express: the pair touches one partition twice in succession and its latency is both round trips.
+
+⚠️ A target that cannot read, paired with a nonzero `get` or `put_get` weight, silently becomes 100%
+puts. Carried forward unchanged from `read_ratio`.
+
+### `warmup` — operations performed but not measured
+
+```yaml
+warmup: { kind: none }                 # measure from the first operation (pre-v10 behaviour)
+warmup: { kind: time,  value: "PT60S" }
+warmup: { kind: count, value: 1000 }
+```
+
+Warmup operations still run, still hit the target and still populate the key space — a benchmark
+that skips them measures a cluster in a state no application ever sees. What they do not do is enter
+the measurement: `achieved_rate`, `measured_operations`, `measured_window` and every
+`latency_*_ms` describe the post-warmup window alone. `wall_time` remains the whole run.
+
+Before v10 every figure included the JVM interpreting before it compiled, the client opening its
+connections and discovering the topology, and the cluster's pages not yet resident. **The shorter the
+run, the more that dominated** — backwards from what a quick sanity run should report.
+
+A `count` warmup can overshoot by up to `concurrency - 1`, for the same reason
+`duration: {kind: count}` can.
+
+### `key_space` — the domain of keys the scenario addresses
+
+```yaml
+key_space: { kind: unbounded }                                        # pre-v10 behaviour
+key_space: { kind: bounded, size: 1000000, distribution: uniform }    # Yardstick's -r/--range
+```
+
+| distribution | shape | use |
+|---|---|---|
+| `uniform` | every key equally likely | the honest default, and a cache's **worst** case |
+| `zipfian` | hot head, long cold tail | how real access patterns look; makes caching look good |
+| `latest` | skewed to the most recently written keys | a feed, a ledger tail, an event stream — the hot set moves with the write cursor, so the cache constantly re-warms |
+
+**Bounded mode is what makes a run repeatable and a get able to hit.** Unbounded, write keys come
+from the key column's `value_source` and reads sample only what *this process* wrote during *this
+run*, so no two runs address the same rows.
+
+Three consequences, all deliberate:
+
+1. **It supersedes the key column's `value_source`**, which must therefore be a `sequence` — index
+   `i` becomes `start + i*step`. Any other source is **refused at construction** with a message
+   naming the column, because a bound that could only be honoured on one half of a put/get pair
+   would produce a run that looks bounded and is not.
+2. **Writes overwrite**, by construction. That is what a put benchmark measures. The per-worker key
+   striping that prevents duplicate PKs in unbounded mode does not apply, and every instance of a
+   fleet addresses the same space — correct for a benchmark, where all drivers hit one range.
+3. **A get-only run must be preceded by a put run.** Nothing pre-populates the space. Check
+   `read_miss_count`.
+
+### What `result.yaml` now reports
+
+```yaml
+scenario_name: "put-benchmark"
+achieved_rate: 48213.7          # operations/sec over the MEASURED window
+error_count: 0
+success_count: 300000
+read_miss_count: 0              # reads that succeeded and found nothing — check before quoting reads
+rows_written: 300000
+rows_per_write: 1.0             # fan-out: 1.0 means one operation was exactly one put
+stop_reason: "time elapsed"
+wall_time: "PT6M"               # whole run, warmup included
+measured_operations: 250000
+measured_window: "PT5M"         # what achieved_rate and the percentiles describe
+latency_p50_ms: 0.41
+latency_p90_ms: 0.88
+latency_p99_ms: 2.15
+latency_max_ms: 61.02
+latency_mean_ms: 0.52
+```
+
+⚠️ **`rows_per_write` is the one to read first when comparing two runs.** One operation is one
+*business event*, which a `data.yaml` with `parent-fk-ref` children turns into several row writes
+across several caches — so `achieved_rate` counts events, not puts. A benchmark-shaped `data.yaml`
+has **one schema and no `parent-fk-ref`**, which gives exactly `1.0`; anything higher and the two
+runs are measuring different amounts of cluster work.
 
 ## Concurrency (v8+)
 
@@ -100,7 +203,9 @@ scenarios:
     duration: { kind: until_stop_condition }
     concurrency: 64
     stop_conditions: [{ kind: external_signal }]
-    read_ratio: 0.0
+    operations: { put: 1.0, get: 0.0, put_get: 0.0 }
+    warmup: { kind: none }
+    key_space: { kind: unbounded }
 ```
 
 - **`rate` stays a per-process target shared by the workers, not per thread.** `concurrency: 64` with `ops_per_second: 1000` is still 1000 ops/s for the process; the threads take turns. Raise `rate` too, or it becomes the bottleneck instead of the cluster.
@@ -141,7 +246,7 @@ schema_version: 3            # current; a v1/v2 file is migrated forward automat
 schemas:
   - name: customer            # maps 1:1 to a GG cache/table name (see gotcha)
     update_ratio: 0.05        # fraction of WRITES that reuse an existing key vs insert a new one.
-                              # NOT a read/write mix — that is read_ratio in ops.yaml. At any value
+                              # NOT a read/write mix — that is `operations` in ops.yaml. At any value
                               # every operation this controls is still a put.
     backups: 1                 # required from v3
     write_synchronization_mode: full_sync   # required from v3
@@ -196,24 +301,52 @@ schemas:
 
 15. **ops `schema_version: 9` invalidates every deployed generator archive, like v7 and v8 did.** v9 replaces `metrics.kafka_bootstrap` / `control.kafka_bootstrap` with a required `broker:` reference (§Broker references). A pre-v9 archive refuses a v9 file outright ("only supports up to schema_version 8"), so **every installed archive and image must be rebuilt and redeployed in the same pass** as the ops file. ⚠️ **Unlike 7→8, hand-bumping `schema_version` is NOT equivalent to running the migration.** `MigrateOpsV8toV9` performs a real rewrite — `kafka_bootstrap: X` → `broker: { kind: address, bootstrap_servers: X }` — so a hand-bumped file also needs those two keys rewritten by hand, or the v9 JSONSchema rejects it for a missing `broker`. (Hand-editing is still the right move for a heavily-commented ops.yaml: the migration rewrites through SnakeYAML and drops every comment.) The migration deliberately **never invents an element name** from an address — only a deployment knows that `10.0.0.5:9092` is `payments-bus` — so switching a channel to the reference form is always a manual, considered edit.
 
-16. **`read_ratio: 1.0` still writes once on a cold start.** The read branch is gated on
-    `keyRegistry.size(rootSchema) > 0` (`ScenarioRunner.kt:227-228`) — with an empty registry the
-    first tick falls through to a write, which registers a key, and every tick after it reads. With
-    N worker threads racing, up to N writes can slip through before the registry is seen as
-    populated. **For a genuinely zero-write run, start from a `state.yaml` written by an earlier
-    load run**: `ScenarioRunnerCli` restores the registry before the first tick, so `size > 0` holds
-    immediately. Note also that reads only ever target `rootSchemas.first()` and sample keys
-    uniformly — there is no hot-key or Zipfian option.
+15a. **ops `schema_version: 10` invalidates every deployed generator archive and image**, as v7,
+    v8 and v9 did. v10 removes `read_ratio` and adds three required keys — `operations`, `warmup`,
+    `key_space`. A pre-v10 archive refuses a v10 file outright, so **rebuild and redeploy the whole
+    fleet in the same pass as the ops file**, not after it. `MigrateOpsV9toV10` does a real rewrite
+    (`read_ratio: r` → `operations: {get: r, put: 1-r, put_get: 0}`), so — as with 8→9 — hand-bumping
+    the version is **not** equivalent to running the migration: a hand-bumped file also needs the
+    three keys written by hand, and v10 sets `additionalProperties: false`, so a surviving
+    `read_ratio` is rejected by name rather than ignored.
 
-17. **Prefer more PROCESSES over more threads when driving a throughput test.**
-    `ControllableRateLimiter.acquire()` takes a **process-wide `ReentrantLock`** on every operation,
-    and on the normal (no live override) path it holds that lock across the delegate's
-    `Thread.sleep` (`ControllableRateLimiter.kt:109-118` + `RateLimiter.kt:22`). Threads in one
-    process therefore serialise on it, and the contention is invisible in the results — it shows up
-    as in-flight operations falling short of `concurrency`, not as an error. Measured on the Power
-    lab: 128 threads in **2** processes held only ~50 operations in flight; the same 128 threads in
-    **4** processes held 112, and throughput rose 29%. The lock is per process, so splitting the
-    same thread count across more processes splits the contention.
+16. **A get-only run still writes on a cold start — unless the key space is bounded.** In
+    `key_space: { kind: unbounded }` the read branch is gated on `keyRegistry.size(rootSchema) > 0`,
+    so with an empty registry the first tick falls through to a write, which registers a key, and
+    every tick after it reads. With N worker threads racing, up to N writes slip through. Two ways
+    out, and the second is the real one:
+    - start from a `state.yaml` written by an earlier load run — `ScenarioRunnerCli` restores the
+      registry before the first tick, so `size > 0` holds immediately; or
+    - **use `key_space: { kind: bounded, … }`**, where keys are computed from the space rather than
+      remembered, so there is nothing to warm up and no write ever slips through.
+
+    ⚠️ A bounded get-only run against a space nothing has filled hits **nothing**. That is not an
+    error and does not raise `error_count` — check **`read_miss_count`** in `result.yaml` before
+    quoting any read figure (§Gotcha 19a). Note also that reads only ever target
+    `rootSchemas.first()`.
+
+17. **✅ FIXED 2026-09-30 — the pacing bottleneck that made more processes beat more threads.**
+    This entry used to advise preferring processes over threads. That advice was a workaround for
+    two defects in the limiter, both now repaired. **Any throughput or in-flight figure recorded
+    before this date was measuring the limiter as much as the cluster** — do not compare across it.
+
+    - `ControllableRateLimiter.acquire()` held a **process-wide `ReentrantLock` across the
+      delegate's wait** on the no-override path, so every worker queued behind every other. Only the
+      override path — reached solely *after* a `set_rate` control command — reserved its slot with a
+      CAS and waited outside the lock, which is why a fleet got faster once someone touched the rate
+      slider. All four limiters now share `PacingCursor`, which does the CAS everywhere, and the
+      lock is gone.
+    - The wait itself was `Thread.sleep(millis, nanos)`, which **rounds any sub-millisecond request
+      up to a whole millisecond**: measured on JDK 17, `Thread.sleep(0, 500)` takes **1.23 ms**,
+      2,400× the request. That capped a waiting thread at roughly **810 ops/s** whatever
+      `ops_per_second` said, and is why `ops_per_second: 1000000` never behaved as though it were
+      unlimited. `PacingWait` now parks and spins to the deadline (`LockSupport.parkNanos` measured
+      3.9 µs for the same 500 ns request).
+
+    Historical record, since it is the evidence: on the Power lab 128 threads in **2** processes
+    held only ~50 operations in flight, while the same 128 in **4** processes held 112 and
+    throughput rose 29%. Source: `PacingCursor.kt`, `RateLimiter.kt` (`PacingWait`),
+    `RateLimiterPacingTest`.
 
 18. **One thin-client connection per server node, per process.** `Gg8KvTarget` builds its
     `ClientConfiguration` with only `setAddressesFinder`, `setTimeout` and
@@ -222,12 +355,33 @@ schemas:
     protocol pipelines, so this is not a hard cap on in-flight requests, but it is a shared write
     path and another reason process count matters more than it looks.
 
-19. **Do not try to read percentiles out of Prometheus.** The OTel instrument exports
-    `data_generator_op_latency_nanoseconds_bucket`, which *looks* like a usable histogram and is
-    not: its largest finite bucket is **0.01 ms** (OTel's default millisecond-scale boundaries
-    applied to a value recorded in nanoseconds), so any workload slower than 10 µs lands entirely in
-    `+Inf` and `histogram_quantile` returns nothing meaningful. Percentiles come from
-    `runLatencyHistogram` on the Kafka feed — see §Metrics, and remember it is in **microseconds**.
+19. **✅ FIXED 2026-09-30 — percentiles are now readable in two more places.**
+    There used to be exactly one source of a percentile: `runLatencyHistogram` on the Kafka feed, a
+    base64 HdrHistogram in **microseconds**, which required a broker to be deployed. That still
+    works and is still the live source. Two additions:
+
+    - **`result.yaml` now carries the run's own latency** — `latency_p50_ms`, `latency_p90_ms`,
+      `latency_p99_ms`, `latency_max_ms`, `latency_mean_ms`, in **milliseconds**. Always written,
+      with or without a `metrics:` block: the histogram was being recorded on every run and read by
+      nobody. A run is now quotable from its own results file.
+    - **`data_generator_op_latency_nanoseconds_bucket` is queryable.** Its largest finite bucket used
+      to be **0.01 ms** — OTel's default millisecond-scale boundaries applied to a value recorded in
+      nanoseconds — so every real operation landed in `+Inf` and `histogram_quantile` returned
+      nothing. `Instruments.LATENCY_BUCKETS_NANOS` now advises boundaries from 10 µs to 10 s. The
+      series keeps its name and unit deliberately, so existing panels keep resolving rather than
+      going empty.
+
+    ⚠️ Percentiles do **not** compose. Merging a fleet still means merging the per-instance
+    histograms, never averaging their p99s.
+
+19a. **`result.yaml` also carries `read_miss_count`.** A read that succeeded and found nothing used
+    to be counted as a plain success, so a run whose every get missed reported a healthy rate and a
+    clean error count. Misses are deliberately **not** errors — a sparse key space is not a broken
+    cluster — so they are their own number, next to `error_count`, and their own OTel counter
+    (`data_generator.op.misses`). **Check it before quoting any read-heavy figure:** a miss ratio
+    near 1 means the run measured the cluster's empty path. Until a bounded key space exists, reads
+    sample only keys this process wrote this run (or restored from `state.yaml`), so a read-only run
+    against a fresh registry is the easy way to produce exactly that.
 
 20. **A missing CLI argument surfaces as a raw stacktrace**, not a usage message:
     `NoSuchElementException: Key --data is missing in the map` at `CliArgs.kt:33`. It names neither
@@ -383,11 +537,13 @@ like a cluster or network fault and is neither. And a standalone probe doing per
 needs the generator's real shape, several schemas and several rows per event. **Do not model this
 workload with one cache and one operation per iteration.**
 
-⚠️ **Affinity awareness is still off.** In `ignite-core` 8.9.18 the setter is
-`ClientConfiguration.setAffinityAwarenessEnabled(boolean)` (not `setPartitionAwarenessEnabled`,
-which does not exist there) and it defaults to false, so every request from a process goes to one
-node over one connection and the rest of the cluster is idle. Routing is the GridGain client's
-job, not the generator's — this is one flag.
+✅ **Affinity awareness is now on** (`Gg8KvTarget.kt:91`). It defaults to **false** in
+`ignite-core` 8.9.18, and while it was off every request from a process went to one node over one
+connection and the rest of the cluster sat idle — so any figure recorded before it was turned on
+was measuring a single server. The setter is `ClientConfiguration.setAffinityAwarenessEnabled`
+there, not `setPartitionAwarenessEnabled`, which does not exist in that version.
+
+`setConnectionsPerServer` is still never called, so the default applies — see gotcha 18.
 
 ## Sources of truth (verify here when exact)
 
@@ -396,7 +552,9 @@ are package-relative (the repo is multi-module: `-core`, `-gg8`, `-gg9`).
 - version constants: `config/ConfiguredVersions.kt` (`CURRENT_OPS_SCHEMA_VERSION`, `CURRENT_DATA_SCHEMA_VERSION`)
 - migrations: the ops/data migration runner(s) + `Migrate*` step classes under `config/` (defer to the repo CLAUDE.md §Key files for exact filenames — both `ConfigMigration` and `OpsConfigMigrationRunner`/`DataConfigMigrationRunner` naming have appeared)
 - ops/data JSONSchema: `src/main/resources/schema/{ops,data}/` (per version)
-- rate limiters: `scenario/` (Constant/Ramped/Stepped, plus `ControllableRateLimiter` wrapping them for runtime override)
+- rate limiters: `scenario/` (Constant/Ramped/Stepped, plus `ControllableRateLimiter` wrapping them for runtime override; all four reserve from the shared `PacingCursor` and wait via `PacingWait`)
+- v10 capabilities: `config/OperationMix.kt`, `config/WarmupSpec.kt`, `config/KeySpaceSpec.kt`, `generation/KeySelector.kt`, `scenario/BoundedKeyResolver.kt`, `config/MigrateOpsV9toV10.kt`, `resources/schema/ops/v10.schema.json`
+- run results: `scenario/ScenarioResult.kt` (`LatencySummary`, the `result.yaml` key list)
 - graceful stop: `scenario/StopSignal.kt` (the one signal every stop source raises) + the shutdown hook and `GRACEFUL_STOP_SECONDS` in `cli/ScenarioRunnerCli.kt`
 - runtime control: `control/` (`ControlCommand` — the sealed `set_rate`/`stop` hierarchy and its per-kind required fields — plus `ControlListener`, `KafkaControlListener`)
 - stop conditions: `scenario/StopConditionEvaluator.kt`; the `external_signal`/`control:` rule is `ExternalSignalControlValidator` in `config/CrossElementValidator.kt`
