@@ -398,6 +398,49 @@ schemas:
     or toggle statistics at runtime through the cluster API.
 
 
+## ⚠️ A run can succeed and still lose its completion line
+
+Observed twice on 2026-10-06, both at high write volume over a 4-minute run. The scenario finishes
+cleanly — `result.yaml` records `stop_reason: "time elapsed"`, the full measured window, 40.8M
+operations and **zero errors** — and then the process dies *afterwards*, while persisting state:
+
+```
+java.lang.OutOfMemoryError
+  at com.gridgain.demo.datagen.scenario.KeyRegistry.snapshot(KeyRegistry.kt:78)
+  at com.gridgain.demo.datagen.scenario.ScenarioRunner.keyRegistrySnapshot(ScenarioRunner.kt:85)
+  at com.gridgain.demo.datagen.cli.ScenarioRunnerCli.run(ScenarioRunnerCli.kt:445)
+```
+
+The measurement is **valid**; only the `scenario '<name>' complete: ... achieved_rate=...` line in
+`run.log` is missing, because the process never reached it.
+
+**Consequence for any harness:** a harvester that greps `run.log` for `complete:` reports this run as
+having produced nothing, which reads exactly like a failed run. **Harvest from `result.yaml`**
+(`<run-dir>/data-generator/runs/<run-id>/result.yaml`) — it carries `achieved_rate`, `error_count`,
+`stop_reason` and the latency percentiles, and it is written before the snapshot step. Treat a run as
+failed only when `result.yaml` is absent or its `stop_reason` is not what you asked for.
+
+`KeyRegistry` growth tracks **total keys written** (throughput x duration), not concurrency, so a
+write-heavy scenario reaches it sooner than a balanced one at the same rate. Raising the generator
+heap defers it; it does not remove it.
+
+## ⚠️ GG9 target: one client, and therefore one connection per node
+
+`Gg9KvTarget` lazily opens a **single** `IgniteClient` per process and holds it for the run. The GG9
+thin client opens one TCP channel per server address and its builder exposes no multiplexing knob —
+`addresses`, `connectTimeout`, `addressFinder`, `backgroundReconnectInterval`, and nothing else. So a
+process talking to a 2-node cluster has exactly 2 channels, each pinned to one Netty event loop at
+each end.
+
+Measured on the Power lab: those 2 client event loops ran at **81.5% and 73.8%** while 768 worker
+threads sat at 5-7%, and on the server 2 of 128 `network-worker` threads ran at ~84% while 126 idled.
+
+⚠️ **This is a latency finding, not a throughput one.** Running 8 processes instead of 2 (same total
+operations in flight, 4x the connections) left throughput unchanged within noise — 73,708 vs 77,259 —
+but **halved p99**, 12.43 ms to 6.55 ms, by spreading work over 8 server event loops instead of 2.
+Do not reach for more processes expecting throughput; reach for them to even out the tail.
+
+
 ## Metrics
 
 - **OTel instruments** (always recorded): in-flight, op duration histogram, errors, target rate, observed/achieved rate — tagged by scenario/target/schema/operation, where `target` is the **cluster name** from `--target-cluster` (see gotcha 12). Exported per the `otel:` block.
