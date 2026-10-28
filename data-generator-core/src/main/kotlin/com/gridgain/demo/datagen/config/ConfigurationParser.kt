@@ -25,6 +25,7 @@ class ConfigurationParser(
             AffinityColumnValidator(),
             DistributionValidator(),
             ExternalSignalControlValidator(),
+            BenchmarkWarmupValidator(),
         )
     ),
 ) {

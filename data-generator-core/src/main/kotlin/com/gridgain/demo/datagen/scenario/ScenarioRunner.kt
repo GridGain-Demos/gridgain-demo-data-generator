@@ -219,6 +219,11 @@ class ScenarioRunner(
             rowsPerWrite = writeOps.get().let { if (it > 0) rowWrites.get().toDouble() / it else 0.0 },
             measuredOperations = measuredOps,
             measuredWindow = Duration.ofNanos(measuredNanos),
+            warmupApplied = when (val w = scenario.warmup) {
+                is NoWarmupSpec -> "none"
+                is TimeWarmupSpec -> "time: ${w.value}"
+                is CountWarmupSpec -> "count: ${w.value}"
+            },
             // Read unconditionally. [metrics] defaults to a detached recorder, but detached means
             // "no reporter is publishing this", not "nothing is recorded" — the histogram is fed by
             // every operation either way. Summarising it here is what makes a run quotable from its

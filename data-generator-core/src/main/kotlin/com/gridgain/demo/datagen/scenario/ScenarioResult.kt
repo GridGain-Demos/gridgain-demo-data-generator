@@ -82,6 +82,17 @@ data class ScenarioResult(
     val measuredOperations: Long = 0L,
     /** Wall time of the measured window. [wallTime] remains the whole run, warmup included. */
     val measuredWindow: Duration = Duration.ZERO,
+    /**
+     * The warmup the scenario asked for, as a reader of this file needs to see it.
+     *
+     * Recorded because `warmup: {kind: none}` is invisible in every other figure here while
+     * changing all of them: it folds JIT compilation, connection establishment and topology
+     * discovery into the measured window. Measured on the Power11 lab 2026-10-28, adding a 90s
+     * warmup to an otherwise identical run moved the worst operation from 394ms to 250ms, took
+     * 529 phantom read misses to zero and raised achieved_rate by 7%. Anyone comparing two
+     * results files has to be able to see which of them includes a cold start.
+     */
+    val warmupApplied: String = "none",
 ) {
     companion object {
         private val mapper: YAMLMapper = YAMLMapper().registerKotlinModule() as YAMLMapper
@@ -103,6 +114,9 @@ data class ScenarioResult(
                 // covers the whole run.
                 "measured_operations" to result.measuredOperations,
                 "measured_window" to result.measuredWindow.toString(),
+                // What was excluded from that window. "none" means nothing was: the figures below
+                // include the cold start.
+                "warmup_applied" to result.warmupApplied,
                 // Flat keys rather than a nested `latency:` map, matching the six that were already
                 // here — this file is read by shell and by the toolkit's host runner, and a flat
                 // key is one grep away in both.

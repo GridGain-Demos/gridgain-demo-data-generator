@@ -246,6 +246,46 @@ class ExternalSignalControlValidator : CrossElementValidator {
 }
 
 /**
+ * Warns when a measurement-shaped scenario measures its own cold start.
+ *
+ * `warmup: {kind: none}` means the first operation enters the figures, so `achieved_rate` and every
+ * `latency_*` include JIT compilation, connection establishment and cluster topology discovery.
+ * That is the right choice for a loader and the wrong one for a benchmark, and nothing says which
+ * you have: `MigrateOpsV9toV10` writes `none` into every pre-v10 scenario to preserve the old
+ * behaviour, so a file that has never been touched since the migration measures cold starts
+ * everywhere without a word.
+ *
+ * Measured on the IBM Power11 lab 2026-10-28, on two otherwise identical runs: adding a 90s warmup
+ * moved the worst operation from 394ms to 250ms, took 529 phantom read misses to zero (against a
+ * fully populated key space) and raised `achieved_rate` by 7%.
+ *
+ * Warns rather than fails, and only for the two duration kinds that describe a measurement:
+ * `until_stop_condition` and `time`. `count` is left alone because that is the loader shape, where
+ * measuring everything is what you want.
+ */
+class BenchmarkWarmupValidator : CrossElementValidator {
+    override fun validate(data: DataConfig, ops: OpsConfig): CrossElementValidationResult {
+        val warnings = mutableListOf<String>()
+        for (scenario in ops.scenarios) {
+            val measurementShaped =
+                scenario.duration is UntilStopDurationSpec || scenario.duration is TimeDurationSpec
+            if (scenario.warmup is NoWarmupSpec && measurementShaped) {
+                warnings += "scenario '${scenario.name}' has 'warmup: {kind: none}', so measurement " +
+                    "starts at the first operation and achieved_rate and every latency_* figure " +
+                    "include JIT compilation, client connection setup and topology discovery. For a " +
+                    "scenario whose numbers will be quoted, set a warmup:\n" +
+                    "        warmup:\n" +
+                    "          kind: time\n" +
+                    "          value: \"PT90S\"\n" +
+                    "      'kind: none' stays valid and is the right choice for a loader or a smoke " +
+                    "test; result.yaml records which was used in 'warmup_applied'."
+            }
+        }
+        return CrossElementValidationResult(errors = emptyList(), warnings = warnings)
+    }
+}
+
+/**
  * Enforces `partition_count >= replicas` on each scenario's optional `distribution:` block.
  * JSONSchema can't express the cross-field constraint without `$data` refs, so it lives here.
  * `replicas >= 1` and `partition_count >= 1` are already enforced by the JSONSchema.
