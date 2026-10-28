@@ -177,11 +177,17 @@ class ScenarioRunner(
         if (generators.size == 1) {
             // Deliberately inline rather than a one-element thread pool: a single-worker run must
             // stay exactly what it was before concurrency existed, on the caller's own thread.
-            workerLoop(generators[0], evaluator, notExhausted, success, error, stopReason)
+            // It also gets [decisionRandom] itself, so a test that injects a seeded Random sees the
+            // same sequence it always did.
+            workerLoop(generators[0], evaluator, notExhausted, success, error, stopReason, decisionRandom)
         } else {
             val workers = generators.mapIndexed { index, gen ->
+                // One Random per worker, seeded FROM [decisionRandom] rather than from the clock:
+                // an injected seed still determines the whole run, while no two workers share the
+                // CAS loop inside a single Random.
+                val workerRandom = Random(decisionRandom.nextLong())
                 Thread(
-                    { workerLoop(gen, evaluator, notExhausted, success, error, stopReason) },
+                    { workerLoop(gen, evaluator, notExhausted, success, error, stopReason, workerRandom) },
                     "datagen-worker-$index",
                 )
             }
@@ -247,6 +253,14 @@ class ScenarioRunner(
         success: AtomicLong,
         error: AtomicLong,
         stopReason: AtomicReference<String>,
+        /**
+         * This worker's own source of randomness, never shared.
+         *
+         * `java.util.Random` advances a single `AtomicLong` by CAS, so one instance handed to every
+         * worker turns each operation-kind choice and each key draw into contended atomics on the
+         * hot path. Per worker, the CAS is uncontended.
+         */
+        random: Random,
     ) {
         while (notExhausted() && stopReason.get().isEmpty()) {
             // Read before the tick rather than after it, so a signal raised mid-tick lets that tick
@@ -258,7 +272,7 @@ class ScenarioRunner(
                 stopReason.compareAndSet("", "$STOPPED_BY_SIGNAL$signalled")
                 break
             }
-            val s = tick(generator, rateLimiter, evaluator)
+            val s = tick(generator, rateLimiter, evaluator, random)
             if (s) success.incrementAndGet() else error.incrementAndGet()
             val triggered = evaluator.shouldStop()
             if (triggered != null) { stopReason.compareAndSet("", triggered); break }
@@ -269,6 +283,7 @@ class ScenarioRunner(
         generator: BusinessEventGenerator,
         rateLimiter: RateLimiter,
         evaluator: StopConditionEvaluator,
+        random: Random,
     ): Boolean {
         rateLimiter.acquire()
         // Before the operation, so the one that crosses the boundary is measured rather than
@@ -280,17 +295,51 @@ class ScenarioRunner(
         instruments.targetRateRef.set(rateLimiter.currentTargetTps())
         val rootSchemaName = scenario.rootSchemas.first()  // multi-root weighting deferred
         val rootKeyColumn = keyColumnByName[rootSchemaName]!!
-        val kind = chooseOperation(rootSchemaName)
+        val kind = chooseOperation(rootSchemaName, random)
         val attrs = instruments.opAttributes(scenario.name, targetName, rootSchemaName, kind.metricLabel)
+
+        // Everything this process has to do for itself — drawing a key, synthesising the row with
+        // DataFaker, stamping the key registry, counting rows — happens HERE, outside the timed
+        // window. It used to sit inside it, which meant `latency_*` carried the client's own cost
+        // on every sample while the comment below claimed the figure was the GridGain round trip.
+        // That inflated writes more than reads (a write generates a row, a read draws a long), and
+        // because the cost is architecture-dependent it biased a ppc64le-vs-x86 latency ratio and
+        // not merely the absolute numbers.
+        //
+        // ⚠️ Guarded, because hoisting it out of the measured block also hoisted it out of that
+        // block's catch. Generation can throw (a value source over a bad expression, an exhausted
+        // sequence), and before the hoist such a failure was caught and counted as a failed
+        // operation. Unguarded here it would instead escape `tick` and kill the worker thread,
+        // silently shrinking a fleet mid-run. The flag keeps the old outcome: the op is recorded
+        // as an error and the run continues.
+        var preparedReadKey: Any? = null
+        var preparedEvent: BusinessEvent? = null
+        var prepareFailed = false
+        try {
+            preparedReadKey = when (kind) {
+                OperationKind.GET, OperationKind.PUT_GET -> readKey(rootSchemaName, random)
+                OperationKind.PUT -> null
+            }
+            preparedEvent = when (kind) {
+                OperationKind.PUT -> prepareWrite(generator, rootSchemaName, rootKeyColumn, null, random)
+                OperationKind.PUT_GET ->
+                    prepareWrite(generator, rootSchemaName, rootKeyColumn, preparedReadKey, random)
+                OperationKind.GET -> null
+            }
+        } catch (e: Exception) {
+            instruments.opErrors.add(1, attrs.toBuilder()
+                .put(Instruments.ATTR_EXCEPTION, e.javaClass.simpleName).build())
+            prepareFailed = true
+        }
 
         instruments.inFlight.add(1, attrs)
         val t0 = System.nanoTime()
         var transactionOutcome: TransactionOutcome = TransactionOutcome.NONE
         val success: Boolean = try {
-            when (kind) {
-                OperationKind.GET -> performRead(rootSchemaName, readKey(rootSchemaName), attrs)
+            if (prepareFailed) false else when (kind) {
+                OperationKind.GET -> performRead(rootSchemaName, preparedReadKey!!, attrs)
                 OperationKind.PUT -> {
-                    val outcome = performWrite(generator, rootSchemaName, rootKeyColumn, key = null)
+                    val outcome = target.write(preparedEvent!!)
                     transactionOutcome = outcome.transactionOutcome
                     outcome.success
                 }
@@ -299,9 +348,8 @@ class ScenarioRunner(
                 // application actually performs, and splitting it would report twice the throughput
                 // at half the latency for the same work.
                 OperationKind.PUT_GET -> {
-                    val key = readKey(rootSchemaName)
-                    val read = performRead(rootSchemaName, key, attrs)
-                    val outcome = performWrite(generator, rootSchemaName, rootKeyColumn, key = key)
+                    val read = performRead(rootSchemaName, preparedReadKey!!, attrs)
+                    val outcome = target.write(preparedEvent!!)
                     transactionOutcome = outcome.transactionOutcome
                     read && outcome.success
                 }
@@ -315,7 +363,14 @@ class ScenarioRunner(
         }
         val latencyNanos = System.nanoTime() - t0
         // Same latency the OTel histogram gets — the wall time of the target operation (the
-        // GridGain write/read), which is the "execution latency" the live graph reports.
+        // GridGain write/read), which is the "execution latency" the live graph reports. Key
+        // selection and row generation are hoisted above t0 so this comment is true of the code.
+        //
+        // ⚠️ Still a CLOSED-LOOP service time: a worker issues its next operation only after this
+        // one returns, and the rate limiter's slot time is not carried in here, so a stall is
+        // recorded once per worker rather than once per operation that should have been issued
+        // during it. Percentiles from this histogram understate a stall's reach; `latency_max_ms`
+        // does not.
         metrics.record(latencyNanos = latencyNanos, success = success)
         instruments.opLatency.record(latencyNanos.toDouble(), attrs)
         instruments.opCount.add(1, attrs)
@@ -353,8 +408,8 @@ class ScenarioRunner(
      * kind that cannot read must reinstate an explicit misconfiguration error rather than let this
      * absorb the mismatch.
      */
-    private fun chooseOperation(rootSchemaName: String): OperationKind {
-        val chosen = scenario.operations.choose(decisionRandom)
+    private fun chooseOperation(rootSchemaName: String, random: Random): OperationKind {
+        val chosen = scenario.operations.choose(random)
         if (chosen == OperationKind.PUT) return chosen
         val canRead = target.supportsReads &&
             (boundedKeys != null || keyRegistry.size(rootSchemaName) > 0)
@@ -362,9 +417,9 @@ class ScenarioRunner(
     }
 
     /** Bounded mode draws from the key space; unbounded mode samples what this run has written. */
-    private fun readKey(rootSchemaName: String): Any =
-        boundedKeys?.nextKey(decisionRandom)
-            ?: keyRegistry.sample(rootSchemaName, decisionRandom)!!
+    private fun readKey(rootSchemaName: String, random: Random): Any =
+        boundedKeys?.nextKey(random)
+            ?: keyRegistry.sample(rootSchemaName, random)!!
 
     private fun performRead(rootSchemaName: String, key: Any, attrs: Attributes): Boolean {
         val outcome = target.read(rootSchemaName, key)
@@ -380,22 +435,31 @@ class ScenarioRunner(
     }
 
     /**
-     * Generate an event and write it. [key] forces the parent key, which is how the put half of a
-     * `put_get` lands on the row the get half just read, and how bounded mode addresses its space.
+     * Build the event a write will send, doing none of the sending.
+     *
+     * Split out of the old `performWrite` so that generation, key forcing, registry stamping and
+     * row counting all sit OUTSIDE the latency window — see the note at the call site. [key] forces
+     * the parent key, which is how the put half of a `put_get` lands on the row the get half just
+     * read, and how bounded mode addresses its space.
+     *
+     * The registry stamp stays here, ahead of the write rather than after it, exactly where it was:
+     * a read can therefore sample a key whose write has not landed yet and miss. That is unchanged
+     * behaviour, not a consequence of the split.
      */
-    private fun performWrite(
+    private fun prepareWrite(
         generator: BusinessEventGenerator,
         rootSchemaName: String,
         rootKeyColumn: String,
         key: Any?,
-    ): WriteOutcome {
+        random: Random,
+    ): BusinessEvent {
         val event = generator.next()
         val rootSchema = schemasByName[rootSchemaName]!!
-        val forcedKey = key ?: boundedKeys?.nextKey(decisionRandom)
+        val forcedKey = key ?: boundedKeys?.nextKey(random)
         val finalEvent = if (forcedKey != null) {
             event.copy(parentRow = LinkedHashMap(event.parentRow).also { it[rootKeyColumn] = forcedKey })
         } else {
-            maybeApplyUpdate(event, rootSchema, rootKeyColumn)
+            maybeApplyUpdate(event, rootSchema, rootKeyColumn, random)
         }
         val parentKey = finalEvent.parentRow[rootKeyColumn]!!
         keyRegistry.register(rootSchemaName, parentKey)
@@ -409,7 +473,7 @@ class ScenarioRunner(
         // data.yaml files are silently incomparable.
         rowWrites.addAndGet(1L + finalEvent.childrenBySchema.values.sumOf { it.size })
         writeOps.incrementAndGet()
-        return target.write(finalEvent)
+        return finalEvent
     }
 
     /**
@@ -440,12 +504,17 @@ class ScenarioRunner(
         instruments.opCount.add(1, txAttrs)
     }
 
-    private fun maybeApplyUpdate(event: BusinessEvent, rootSchema: SchemaSpec, keyColumn: String): BusinessEvent {
+    private fun maybeApplyUpdate(
+        event: BusinessEvent,
+        rootSchema: SchemaSpec,
+        keyColumn: String,
+        random: Random,
+    ): BusinessEvent {
         if (rootSchema.updateRatio > 0.0 &&
             keyRegistry.size(rootSchema.name) > 0 &&
-            decisionRandom.nextDouble() < rootSchema.updateRatio
+            random.nextDouble() < rootSchema.updateRatio
         ) {
-            val existingKey = keyRegistry.sample(rootSchema.name, decisionRandom)!!
+            val existingKey = keyRegistry.sample(rootSchema.name, random)!!
             val newParent = LinkedHashMap(event.parentRow)
             newParent[keyColumn] = existingKey
             return event.copy(parentRow = newParent)

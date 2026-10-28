@@ -150,6 +150,23 @@ The 529 "misses" were against a **fully populated** key space — they were cold
 they are the clearest tell that a run measured its own warm-up. `result.yaml` records which setting
 produced a given file in **`warmup_applied`**, so two results can be compared without guessing.
 
+### What `latency_*` actually measures
+
+The window opens immediately before the target call and closes immediately after it. Key selection
+and row generation are **outside** it (corrected 2026-10-29 after a review; they used to be inside,
+so every sample carried the client's own cost — which differs by architecture and so biased a
+ppc64le-vs-x86 latency *ratio*, not just the absolute numbers).
+
+⚠️ **These are CLOSED-LOOP service latencies at a fixed concurrency, not response times.** A worker
+issues its next operation only after the previous one returns, and the rate limiter's slot time is
+not carried into the measurement. When the target stalls for S ms, each of N workers records ONE
+sample of S ms; an open-loop client at the same rate would have recorded many. So a stall lands in
+`latency_max_ms` and barely moves `latency_p99_ms` — the classic coordinated-omission
+understatement. This is the same quantity YCSB reports without `-target`.
+
+Fine for comparing platforms at equal concurrency, which is what the figures are usually for. **Not
+a service-level response time**, and it must not be quoted as one.
+
 ### `key_space` — the domain of keys the scenario addresses
 
 ```yaml
