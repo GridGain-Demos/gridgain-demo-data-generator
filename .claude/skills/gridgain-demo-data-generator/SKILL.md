@@ -214,9 +214,16 @@ warmup_applied: "time: PT90S"   # what was EXCLUDED; "none" = the figures includ
 latency_p50_ms: 0.41
 latency_p90_ms: 0.88
 latency_p99_ms: 2.15
+latency_p999_ms: 18.40          # the one in a thousand — see the note below
 latency_max_ms: 61.02
 latency_mean_ms: 0.52
 ```
+
+⚠️ **Quote `latency_p999_ms`, not `latency_max_ms`, for a tail figure.** `max` is a single
+operation out of millions and moves with anything transient — a GC pause, a checkpoint, a scheduler
+hiccup. On the Power lab 2026-10-28 `p99` read 17.8 ms while `max` was over a second, with nothing
+reported in between; p99.9 puts a number there, backed by thousands of samples at these rates.
+A regulated audience will ask for it.
 
 ⚠️ **`rows_per_write` is the one to read first when comparing two runs.** One operation is one
 *business event*, which a `data.yaml` with `parent-fk-ref` children turns into several row writes

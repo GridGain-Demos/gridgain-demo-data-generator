@@ -47,7 +47,7 @@ class ScenarioResultTest {
     fun `writes latency percentiles alongside throughput`(@TempDir dir: Path) {
         val out = dir.resolve("result.yaml")
         val latency = LatencySummary(
-            p50Ms = 1.5, p90Ms = 4.25, p99Ms = 12.0, maxMs = 98.5, meanMs = 2.75,
+            p50Ms = 1.5, p90Ms = 4.25, p99Ms = 12.0, p999Ms = 41.0, maxMs = 98.5, meanMs = 2.75,
         )
         ScenarioResult.write(result(latency), out)
 
@@ -55,6 +55,7 @@ class ScenarioResultTest {
         assertThat(text).contains("latency_p50_ms: 1.5")
         assertThat(text).contains("latency_p90_ms: 4.25")
         assertThat(text).contains("latency_p99_ms: 12.0")
+        assertThat(text).contains("latency_p999_ms: 41.0")
         assertThat(text).contains("latency_max_ms: 98.5")
         assertThat(text).contains("latency_mean_ms: 2.75")
     }
@@ -87,5 +88,29 @@ class ScenarioResultTest {
     fun `an empty histogram summarises to zeros`() {
         val summary = LatencySummary.from(org.HdrHistogram.Histogram(60_000_000L, 3))
         assertThat(summary).isEqualTo(LatencySummary.EMPTY)
+    }
+
+    /**
+     * p99.9 is a different number from p99 and from max, and that is the whole point of carrying it.
+     *
+     * p99 hides the stalls a regulated workload is judged on: on the Power lab p99 read 17.8 ms
+     * while the worst operation was over a second, with nothing reported in between. A thousand
+     * samples put a value between them; `maxMs` rests on exactly one.
+     */
+    @Test
+    fun `p99_9 sits between p99 and max rather than tracking either`() {
+        val histogram = org.HdrHistogram.Histogram(60_000_000L, 3)
+        repeat(9_980) { histogram.recordValue(1_000L) }   // 99.8% at 1 ms
+        repeat(19) { histogram.recordValue(50_000L) }     // a thin band at 50 ms
+        histogram.recordValue(900_000L)                   // one outlier at 900 ms
+
+        val s = LatencySummary.from(histogram)
+
+        assertThat(s.p99Ms).isEqualTo(1.0)
+        assertThat(s.p999Ms)
+            .describedAs("the 50 ms band is invisible to p99 and is not the max either")
+            .isGreaterThan(s.p99Ms)
+            .isLessThan(s.maxMs)
+        assertThat(s.maxMs).isGreaterThan(800.0)
     }
 }

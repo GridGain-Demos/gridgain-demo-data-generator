@@ -22,12 +22,22 @@ data class LatencySummary(
     val p50Ms: Double,
     val p90Ms: Double,
     val p99Ms: Double,
+    /**
+     * The one in a thousand.
+     *
+     * Added 2026-10-28 because p99 hides the stalls a regulated workload is actually judged on: on
+     * the Power lab p99 sat at 17.8 ms while the worst operation was over a second, and nothing
+     * between those two numbers was reported. At the rates here a 5-minute run holds millions of
+     * operations, so p99.9 is backed by thousands of samples rather than the single one `maxMs`
+     * rests on.
+     */
+    val p999Ms: Double,
     val maxMs: Double,
     val meanMs: Double,
 ) {
     companion object {
         /** A run that recorded nothing. Zeros rather than an absent value: a run still reports. */
-        val EMPTY = LatencySummary(0.0, 0.0, 0.0, 0.0, 0.0)
+        val EMPTY = LatencySummary(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         /** Summarise a whole-run histogram. [histogram] records **microseconds**. */
         fun from(histogram: Histogram): LatencySummary {
@@ -37,6 +47,7 @@ data class LatencySummary(
                 p50Ms = ms(histogram.getValueAtPercentile(50.0)),
                 p90Ms = ms(histogram.getValueAtPercentile(90.0)),
                 p99Ms = ms(histogram.getValueAtPercentile(99.0)),
+                p999Ms = ms(histogram.getValueAtPercentile(99.9)),
                 maxMs = ms(histogram.maxValue),
                 meanMs = ms(histogram.mean),
             )
@@ -123,6 +134,7 @@ data class ScenarioResult(
                 "latency_p50_ms" to result.latency.p50Ms,
                 "latency_p90_ms" to result.latency.p90Ms,
                 "latency_p99_ms" to result.latency.p99Ms,
+                "latency_p999_ms" to result.latency.p999Ms,
                 "latency_max_ms" to result.latency.maxMs,
                 "latency_mean_ms" to result.latency.meanMs,
             )
