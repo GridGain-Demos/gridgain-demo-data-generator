@@ -63,6 +63,7 @@ jib {
             "org.opencontainers.image.title"       to "GridGain Demo Data Generator (GG9)",
             "org.opencontainers.image.version"     to imageTag,
             "org.opencontainers.image.source"      to SOURCE_REPO_URL,
+            "org.opencontainers.image.licenses"    to "BSD-3-Clause",
             "org.opencontainers.image.description" to "Data-generator runtime targeting a GridGain 9 cluster. Run inside Kubernetes as a Job or Pod via the demo plugin's data_generator section.",
             "org.gridgain.demo.major-version"      to "9",
         ))

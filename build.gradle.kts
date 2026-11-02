@@ -35,6 +35,13 @@ allprojects {
 }
 
 subprojects {
+
+    // BSD clause 2 requires the copyright notice and disclaimer to accompany redistribution in
+    // binary form, so the licence travels INSIDE the jar rather than only in the repo and the
+    // POM. META-INF/LICENSE is where a consumer's tooling looks for it.
+    tasks.withType<Jar>().configureEach {
+        metaInf { from(rootProject.file("LICENSE")) }
+    }
     apply(plugin = "org.jetbrains.kotlin.jvm")
     apply(plugin = "maven-publish")
 
@@ -57,6 +64,21 @@ subprojects {
     }
 
     extensions.configure<PublishingExtension>("publishing") {
+        // Declared so the published POM states the licence. Without this the artifacts on Nexus
+        // carry no licence at all, which is what a consumer's compliance scan reads — the
+        // LICENSE file in the repo is invisible to them.
+        publications.withType<MavenPublication>().configureEach {
+            pom {
+                licenses {
+                    license {
+                        name.set("BSD 3-Clause License")
+                        url.set("https://opensource.org/licenses/BSD-3-Clause")
+                        distribution.set("repo")
+                    }
+                }
+            }
+        }
+
         publications {
             create<MavenPublication>("maven") {
                 from(components["java"])
